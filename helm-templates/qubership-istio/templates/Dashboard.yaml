@@ -1,4 +1,3 @@
-{{- if .Values.monitoring.enabled }}
 ---
 apiVersion: integreatly.org/v1alpha1
 kind: GrafanaDashboard
@@ -10,7 +9,7 @@ metadata:
 spec:
   grafanaCom:
     id: 7639       # Istio Mesh Dashboard
-    revision: 1
+    revision: 299
 ---
 apiVersion: integreatly.org/v1alpha1
 kind: GrafanaDashboard
@@ -22,7 +21,7 @@ metadata:
 spec:
   grafanaCom:
     id: 7636       # Istio Service Dashboard
-    revision: 1
+    revision: 299
 ---
 apiVersion: integreatly.org/v1alpha1
 kind: GrafanaDashboard
@@ -34,5 +33,16 @@ metadata:
 spec:
   grafanaCom:
     id: 7630       # Istio Workload Dashboard
-    revision: 1
-{{- end }}
+    revision: 299
+---
+apiVersion: integreatly.org/v1alpha1
+kind: GrafanaDashboard
+metadata:
+  name: istio-performance-dashboard
+  labels:
+    app.kubernetes.io/part-of: 'Cloud-Core'
+    app.kubernetes.io/processed-by-operator: 'grafana-operator'
+spec:
+  grafanaCom:
+    id: 11829       # Istio Performance Dashboard
+    revision: 299
