@@ -4,6 +4,13 @@ permissions:
   packages: write
   actions: read
 on:
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Disable dry-run mode to publish version"
+        required: false
+        default: true
+        type: "boolean"
   release:
     types: [created]
   push:
@@ -198,7 +205,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: "${{ needs.helm-charts-build.outputs.istio-minor-version }}-${{ env.TAG_NAME }},${{ needs.helm-charts-build.outputs.istio-minor-version }}-latest"
           registry: ghcr.io
-          dry-run: ${{ github.event.pull_request.user.login == 'renovate[bot]' ||  github.event_name == 'push' }} 
+          dry-run: ${{ github.event.inputs.dry-run == 'false' && false || (github.event.inputs.dry-run || github.event.pull_request.user.login == 'renovate[bot]' || github.event_name == 'push') }} 
         env:
            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
