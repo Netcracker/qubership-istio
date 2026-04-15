@@ -124,7 +124,7 @@ jobs:
           version: v4.0.1
 
       - name: Setup Python (required for ct)
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v6
         with:
           python-version: "3.x"
     
@@ -133,7 +133,7 @@ jobs:
     
       # Lint chart (includes schema validation)
       - name: Run ct lint
-        run: ct lint --all --charts-dir ./helm-templates-extracted/qubership-istio
+        run: ct lint --chart-dirs ./helm-templates-extracted/qubership-istio
       
       - name: Create kind cluster
         uses: helm/kind-action@v1
