@@ -140,9 +140,14 @@ jobs:
         with:
           cluster_name: istio-test
 
-      # Install chart into cluster (strong validation)
-      - name: Run ct install
-        run: ct install --all --chart-dirs ./helm-templates-extracted/qubership-istio
+      - name: Helm install qubership-istio
+        run: |
+          helm upgrade --install qubership-istio ./helm-templates-extracted/qubership-istio \
+            --namespace istio-system \
+            --create-namespace \
+            --timeout 3m \
+            --wait \
+            --force-conflicts
 
       - name: Verify rollout
         run: |
