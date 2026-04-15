@@ -17,7 +17,12 @@ global:
 # ---------------------------------------------------------------------------
 # istio-base — CRDs and cluster-scoped resources
 # ---------------------------------------------------------------------------
-base: {}
+base:
+  # Override the failurePolicy for the validation webhook.
+  # By default, the webhook starts with "Ignore" and istiod flips it to "Fail" once ready.
+  # Set to "Fail" to avoid the flip-flop, which is useful for server-side apply tools
+  base:
+    validationFailurePolicy: Fail    
 
 # ---------------------------------------------------------------------------
 # cni — CNI plugin DaemonSet
@@ -60,6 +65,12 @@ istiod:
   # Variant of the image to use.
   # Currently supported are: [debug, distroless]
   # variant: ""
+
+  # Override the failurePolicy for the validation webhook.
+  # By default, the webhook starts with "Ignore" and istiod flips it to "Fail" once ready.
+  # Set to "Fail" to avoid the flip-flop, which is useful for server-side apply tools
+  base:
+    validationFailurePolicy: Fail    
 
   meshConfig:
     accessLogFile: "/dev/stdout"
