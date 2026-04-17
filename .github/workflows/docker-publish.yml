@@ -85,6 +85,10 @@ jobs:
           ztunnel_image: ${ZTUNNEL_IMAGE}
           EOF
 
+      - name: Inject tweak templates into subchart packages
+        run: |
+          bash tweak/tweak.sh
+
       - name: Upload helm-templates artifact
         uses: actions/upload-artifact@v7
         with:
