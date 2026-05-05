@@ -1,3 +1,4 @@
+{{- if and .Values.monitoring.enabled (eq .Values.SERVICE_MESH_TYPE "Istio") }}
 ---
 apiVersion: integreatly.org/v1alpha1
 kind: GrafanaDashboard
@@ -46,3 +47,4 @@ spec:
   grafanaCom:
     id: 11829       # Istio Performance Dashboard
     revision: 299
+{{- end }}

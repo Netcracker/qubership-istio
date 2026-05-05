@@ -109,6 +109,7 @@ ztunnel:
       cpu: 400m
       memory: 512Mi
 
+SERVICE_MESH_TYPE : "Istio"   # or "Core to disable"
 MONITORING_ENABLED: &monitoringEnabled false
 monitoring:
   enabled: *monitoringEnabled
