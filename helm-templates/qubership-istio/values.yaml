@@ -111,6 +111,15 @@ ztunnel:
       proxyMetadata:
         ISTIO_META_DNS_CAPTURE: "true"
         ISTIO_META_ROUTER_MODE: "sni-dnat"
+      proxyHeaders:
+        server:
+          disabled: true
+        envoyDebugHeaders:
+          disabled: true
+        metadataExchangeHeaders:
+          mode: IN_MESH         
+        attemptCount:
+          disabled: true
 
   resources:
     requests:
