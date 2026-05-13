@@ -47,4 +47,28 @@ spec:
   grafanaCom:
     id: 11829       # Istio Performance Dashboard
     revision: 299
+---
+apiVersion: integreatly.org/v1alpha1
+kind: GrafanaDashboard
+metadata:
+  name: istio-control-plane-dashboard
+  labels:
+    app.kubernetes.io/part-of: 'Cloud-Core'
+    app.kubernetes.io/processed-by-operator: 'grafana-operator'
+spec:
+  grafanaCom:
+    id: 7645       # Istio Control Plane Dashboard
+    revision: 299
+---
+apiVersion: integreatly.org/v1alpha1
+kind: GrafanaDashboard
+metadata:
+  name: istio-ztunnel-dashboard
+  labels:
+    app.kubernetes.io/part-of: 'Cloud-Core'
+    app.kubernetes.io/processed-by-operator: 'grafana-operator'
+spec:
+  grafanaCom:
+    id: 21306       # Istio Ztunnel Dashboard
+    revision: 68
 {{- end }}
