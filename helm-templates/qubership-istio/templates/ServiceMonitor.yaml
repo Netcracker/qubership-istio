@@ -1,4 +1,4 @@
-{{- if and .Values.monitoring.enabled (eq .Values.SERVICE_MESH_TYPE "Istio") }}
+{{- if and .Values.MONITORING_ENABLED (eq .Values.SERVICE_MESH_TYPE "Istio") }}
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
@@ -15,5 +15,5 @@ spec:
       istio: pilot
   endpoints:
     - port: http-monitoring
-      interval: {{ .Values.monitoring.scrapeInterval }}
+      interval: {{ .Values.MONITORING_SCRAPE_INTERVAL }}
   {{- end }}

@@ -1,74 +1,30 @@
-{{- if and .Values.monitoring.enabled (eq .Values.SERVICE_MESH_TYPE "Istio") }}
----
-apiVersion: integreatly.org/v1alpha1
-kind: GrafanaDashboard
-metadata:
-  name: istio-mesh-dashboard
-  labels:
-    app.kubernetes.io/part-of: 'Cloud-Core'
-    app.kubernetes.io/processed-by-operator: 'grafana-operator'
-spec:
-  grafanaCom:
-    id: 7639       # Istio Mesh Dashboard
-    revision: 299
----
-apiVersion: integreatly.org/v1alpha1
-kind: GrafanaDashboard
-metadata:
-  name: istio-service-dashboard
-  labels:
-    app.kubernetes.io/part-of: 'Cloud-Core'
-    app.kubernetes.io/processed-by-operator: 'grafana-operator'
-spec:
-  grafanaCom:
-    id: 7636       # Istio Service Dashboard
-    revision: 299
----
-apiVersion: integreatly.org/v1alpha1
-kind: GrafanaDashboard
-metadata:
-  name: istio-workload-dashboard
-  labels:
-    app.kubernetes.io/part-of: 'Cloud-Core'
-    app.kubernetes.io/processed-by-operator: 'grafana-operator'
-spec:
-  grafanaCom:
-    id: 7630       # Istio Workload Dashboard
-    revision: 299
----
-apiVersion: integreatly.org/v1alpha1
-kind: GrafanaDashboard
-metadata:
-  name: istio-performance-dashboard
-  labels:
-    app.kubernetes.io/part-of: 'Cloud-Core'
-    app.kubernetes.io/processed-by-operator: 'grafana-operator'
-spec:
-  grafanaCom:
-    id: 11829       # Istio Performance Dashboard
-    revision: 299
+{{- if and .Values.MONITORING_ENABLED (eq .Values.SERVICE_MESH_TYPE "Istio") }}
 ---
 apiVersion: integreatly.org/v1alpha1
 kind: GrafanaDashboard
 metadata:
   name: istio-control-plane-dashboard
   labels:
+    app: grafana
     app.kubernetes.io/part-of: 'Cloud-Core'
+    app.kubernetes.io/managed-by: 'saasDeployer'
     app.kubernetes.io/processed-by-operator: 'grafana-operator'
+    deployment.netcracker.com/sessionId: ''
 spec:
-  grafanaCom:
-    id: 7645       # Istio Control Plane Dashboard
-    revision: 299
+  name: istio-control-plane-dashboard.json
+  json: {{ .Files.Get  "dashboards/istio-control-plane-dashboard.json" | toJson }}
 ---
 apiVersion: integreatly.org/v1alpha1
 kind: GrafanaDashboard
 metadata:
   name: istio-ztunnel-dashboard
   labels:
+    app: grafana
     app.kubernetes.io/part-of: 'Cloud-Core'
+    app.kubernetes.io/managed-by: 'saasDeployer'
     app.kubernetes.io/processed-by-operator: 'grafana-operator'
+    deployment.netcracker.com/sessionId: ''
 spec:
-  grafanaCom:
-    id: 21306       # Istio Ztunnel Dashboard
-    revision: 68
+  name: istio-ztunnel-dashboard.json
+  json: {{ .Files.Get  "dashboards/istio-ztunnel-dashboard.json" | toJson }}
 {{- end }}

@@ -1,0 +1,16 @@
+{{- if and .Values.MONITORING_ENABLED (eq .Values.SERVICE_MESH_TYPE "Istio") }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: ztunnel-monitor
+  namespace: {{ .Values.global.istioNamespace }}
+spec:
+  podMetricsEndpoints:
+    - interval: {{ .Values.MONITORING_SCRAPE_INTERVAL }}
+      path: /metrics
+      port: ztunnel-stats
+  selector:
+    matchLabels:
+      app: ztunnel
+  {{- end }}
