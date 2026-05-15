@@ -74,6 +74,9 @@ istiod:
 
   meshConfig:
     accessLogFile: "/dev/stdout"
+    defaultConfig:
+      gatewayTopology:
+        numTrustedProxies: 1
 
   gatewayClasses:
     istio:
