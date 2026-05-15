@@ -4,7 +4,6 @@ apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
   name: ztunnel-monitor
-  namespace: {{ .Values.global.istioNamespace }}
 spec:
   podMetricsEndpoints:
     - interval: {{ .Values.MONITORING_SCRAPE_INTERVAL }}
