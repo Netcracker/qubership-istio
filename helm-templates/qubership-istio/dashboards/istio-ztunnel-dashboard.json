@@ -174,7 +174,7 @@
           },
           "alias": "limit",
           "expr": "kube_pod_container_resource_limits{container=\"istio-proxy\",pod=~\"ztunnel-.*\",resource=\"memory\"}",
-          "legendFormat": "CPU Limit ({{pod}})",
+          "legendFormat": "Memory Limit ({{pod}})",
           "refId": "B"
         }
       ],
