@@ -121,7 +121,32 @@
             "showPoints": "never"
           },
           "unit": "bytes"
-        }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "F"
+            },
+            "properties": [
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 10,
@@ -173,6 +198,16 @@
           },
           "expr": "sum by (pod) (go_memstats_heap_alloc_bytes{app=\"istiod\"})",
           "legendFormat": "Heap (Allocated) ({{pod}})"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "alias": "limit",
+          "expr": "kube_pod_container_resource_limits{container=\"discovery\",pod=~\"istiod-.*\",resource=\"memory\"}",
+          "legendFormat": "Memory Limit ({{pod}})",
+          "refId": "F"
         }
       ],
       "title": "Memory Usage",
