@@ -116,7 +116,7 @@
           {
             "matcher": {
               "id": "byFrameRefID",
-              "options": "B"
+              "options": "F"
             },
             "properties": [
               {
@@ -131,8 +131,7 @@
                 "id": "color",
                 "value": {
                   "fixedColor": "red",
-                  "mode": "shades",
-                  "seriesBy": "last"
+                  "mode": "fixed"
                 }
               }
             ]
@@ -175,7 +174,7 @@
           "alias": "limit",
           "expr": "kube_pod_container_resource_limits{container=\"istio-proxy\",pod=~\"ztunnel-.*\",resource=\"memory\"}",
           "legendFormat": "Memory Limit ({{pod}})",
-          "refId": "B"
+          "refId": "F"
         }
       ],
       "title": "Memory Usage",
@@ -214,8 +213,7 @@
                 "id": "color",
                 "value": {
                   "fixedColor": "red",
-                  "mode": "shades",
-                  "seriesBy": "last"
+                  "mode": "fixed"
                 }
               }
             ]
