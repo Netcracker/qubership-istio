@@ -194,6 +194,7 @@ jobs:
             --wait \
             --reuse-values \
             --set istiod.meshConfig.defaultConfig.gatewayTopology.numTrustedProxies=2
+          kubectl rollout status deployment/xff-test-istio -n istio-system --timeout=120s
 
       - name: Verify numTrustedProxies=2 in mesh config
         run: |
@@ -209,19 +210,23 @@ jobs:
 
       - name: Verify XFF numTrustedProxies=2 behavior
         run: |
-          kubectl port-forward -n istio-system svc/xff-test-istio 18080:80 &
-          PF_PID=$!
-
           # With numTrustedProxies=2 Envoy trusts 2 hops from the right of XFF.
           # We send 2 intermediate IPs; Envoy appends the peer, making 3 entries total.
           # X-Envoy-External-Address must be the leftmost (original client) IP.
-          # Loop until the expected value appears — xDS propagation after helm upgrade
-          # may take several seconds even after istiod is ready.
+          # A fresh port-forward is started each iteration so a pod restart mid-loop
+          # (triggered by istiod pushing the new xDS config) cannot kill the whole loop.
           SPOOFED_IP="203.0.113.1"
           EXTERNAL_ADDR=""
           HEADERS=""
           for i in $(seq 1 12); do
-            HEADERS=$(curl -sf -H "X-Forwarded-For: ${SPOOFED_IP}, 10.0.0.1" http://127.0.0.1:18080/headers 2>/dev/null) || { sleep 5; continue; }
+            kubectl port-forward -n istio-system svc/xff-test-istio 18080:80 &
+            PF_PID=$!
+            sleep 2
+            HEADERS=$(curl -sf -H "X-Forwarded-For: ${SPOOFED_IP}, 10.0.0.1" http://127.0.0.1:18080/headers 2>/dev/null)
+            CURL_EXIT=$?
+            kill ${PF_PID} 2>/dev/null || true
+            wait ${PF_PID} 2>/dev/null || true
+            [ ${CURL_EXIT} -ne 0 ] && { echo "Attempt ${i}: curl failed, retrying in 5s..."; sleep 3; continue; }
             EXTERNAL_ADDR=$(echo "${HEADERS}" | jq -r '
               .headers | to_entries[] |
               select(.key | ascii_downcase == "x-envoy-external-address") |
@@ -230,7 +235,6 @@ jobs:
             echo "Attempt ${i}: X-Envoy-External-Address=${EXTERNAL_ADDR}, retrying in 5s..."
             sleep 5
           done
-          kill ${PF_PID} 2>/dev/null || true
 
           if [ "${EXTERNAL_ADDR}" != "${SPOOFED_IP}" ]; then
             echo "ERROR: expected X-Envoy-External-Address=${SPOOFED_IP}, got ${EXTERNAL_ADDR}"
