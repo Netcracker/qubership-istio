@@ -1,0 +1,10 @@
+{{- /*
+  Overrides the docker registry value using a template defined in the parent chart.
+  This is necessary when the current chart is included as a subchart — the real
+  docker registry value cannot be known statically and must be calculated at deploy time
+  by the parent chart's template logic.
+*/ -}}
+{{- $dockerRegistry := include "custom.docker.registry" . -}}
+{{- if $dockerRegistry -}}
+{{- $_ := merge .Values (dict "global" (dict "hub" $dockerRegistry)) -}}
+{{- end -}}

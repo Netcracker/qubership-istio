@@ -44,6 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       istio-minor-version: ${{ steps.version.outputs.istio-minor-version }}
+      istio-version: ${{ steps.version.outputs.istio-version }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -52,6 +53,7 @@ jobs:
         id: version
         run: |
           ISTIO_VERSION="$(yq e '.dependencies[0].version' helm-templates/qubership-istio/Chart.yaml)"
+          echo "istio-version=${ISTIO_VERSION}" >> "$GITHUB_OUTPUT"
           echo "istio-minor-version=${ISTIO_VERSION%.*}" >> "$GITHUB_OUTPUT"
 
       - name: Install Helm 4
@@ -82,6 +84,10 @@ jobs:
           pilot_image: ${ISTIOD_IMAGE}
           ztunnel_image: ${ZTUNNEL_IMAGE}
           EOF
+
+      - name: Inject tweak templates into subchart packages
+        run: |
+          bash tweak/tweak.sh
 
       - name: Upload helm-templates artifact
         uses: actions/upload-artifact@v7
@@ -120,6 +126,18 @@ jobs:
         uses: azure/setup-helm@v5
         with:
           version: v4.0.1
+
+      - name: Setup Python (required for ct)
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+
+      - name: Install chart-testing
+        uses: helm/chart-testing-action@v2
+
+      # Lint chart (includes schema validation)
+      - name: Run ct lint
+        run: ct lint --all --chart-dirs ./helm-templates-extracted/qubership-istio
 
       - name: Create kind cluster
         uses: helm/kind-action@v1
@@ -197,9 +215,9 @@ jobs:
           download-artifact-path: ./helm-templates/qubership-istio/
           download-artifact-merge-multiple: true
           platforms: linux/amd64,linux/arm64
-          tags: "${{ needs.helm-charts-build.outputs.istio-minor-version }}-${{ env.TAG_NAME }},${{ needs.helm-charts-build.outputs.istio-minor-version }}-latest"
+          tags: "${{ needs.helm-charts-build.outputs.istio-minor-version }}-${{ env.TAG_NAME }},${{ needs.helm-charts-build.outputs.istio-minor-version }}-latest,${{ needs.helm-charts-build.outputs.istio-version }}"
           registry: ghcr.io
-          dry-run: ${{ github.event.pull_request.user.login == 'renovate[bot]' ||  github.event_name == 'push' }} 
+          dry-run: ${{ github.event.pull_request.user.login == 'renovate[bot]' }}
         env:
            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
