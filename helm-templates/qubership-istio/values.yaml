@@ -123,6 +123,6 @@ ztunnel:
       cpu: 400m
       memory: 512Mi
 
-monitoringScrapeInterval: 15s
-
 MONITORING_ENABLED: true
+monitoring:
+  scrapeInterval: 15s

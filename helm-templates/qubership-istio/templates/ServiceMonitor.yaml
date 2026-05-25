@@ -12,5 +12,5 @@ spec:
       istio: pilot
   endpoints:
     - port: http-monitoring
-      interval: {{ .Values.monitoringScrapeInterval }}
+      interval: {{ .Values.monitoring.scrapeInterval }}
   {{- end }}

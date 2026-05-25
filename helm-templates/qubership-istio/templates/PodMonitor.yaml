@@ -6,7 +6,7 @@ metadata:
   name: ztunnel-monitor
 spec:
   podMetricsEndpoints:
-    - interval: {{ .Values.monitoringScrapeInterval }}
+    - interval: {{ .Values.monitoring.scrapeInterval }}
       path: /metrics
       port: ztunnel-stats
   selector:
