@@ -165,18 +165,20 @@ jobs:
           # connection) as the one trusted proxy hop, so X-Envoy-External-Address
           # must equal the IP we placed in X-Forwarded-For.
           SPOOFED_IP="203.0.113.1"
+          EXTERNAL_ADDR=""
           HEADERS=""
           for i in $(seq 1 12); do
-            HEADERS=$(curl -sf -H "X-Forwarded-For: ${SPOOFED_IP}" http://127.0.0.1:18080/headers) && break
-            echo "Attempt ${i}: gateway not ready yet, retrying in 5s..."
+            HEADERS=$(curl -sf -H "X-Forwarded-For: ${SPOOFED_IP}" http://127.0.0.1:18080/headers 2>/dev/null) || { sleep 5; continue; }
+            EXTERNAL_ADDR=$(echo "${HEADERS}" | jq -r '
+              .headers | to_entries[] |
+              select(.key | ascii_downcase == "x-envoy-external-address") |
+              .value[0]')
+            [ "${EXTERNAL_ADDR}" = "${SPOOFED_IP}" ] && break
+            echo "Attempt ${i}: X-Envoy-External-Address=${EXTERNAL_ADDR}, retrying in 5s..."
             sleep 5
           done
           kill ${PF_PID} 2>/dev/null || true
 
-          EXTERNAL_ADDR=$(echo "${HEADERS}" | jq -r '
-            .headers | to_entries[] |
-            select(.key | ascii_downcase == "x-envoy-external-address") |
-            .value[0]')
           if [ "${EXTERNAL_ADDR}" != "${SPOOFED_IP}" ]; then
             echo "ERROR: expected X-Envoy-External-Address=${SPOOFED_IP}, got ${EXTERNAL_ADDR}"
             echo "Full response: ${HEADERS}"
@@ -213,19 +215,23 @@ jobs:
           # With numTrustedProxies=2 Envoy trusts 2 hops from the right of XFF.
           # We send 2 intermediate IPs; Envoy appends the peer, making 3 entries total.
           # X-Envoy-External-Address must be the leftmost (original client) IP.
+          # Loop until the expected value appears — xDS propagation after helm upgrade
+          # may take several seconds even after istiod is ready.
           SPOOFED_IP="203.0.113.1"
+          EXTERNAL_ADDR=""
           HEADERS=""
           for i in $(seq 1 12); do
-            HEADERS=$(curl -sf -H "X-Forwarded-For: ${SPOOFED_IP}, 10.0.0.1" http://127.0.0.1:18080/headers) && break
-            echo "Attempt ${i}: gateway not ready yet, retrying in 5s..."
+            HEADERS=$(curl -sf -H "X-Forwarded-For: ${SPOOFED_IP}, 10.0.0.1" http://127.0.0.1:18080/headers 2>/dev/null) || { sleep 5; continue; }
+            EXTERNAL_ADDR=$(echo "${HEADERS}" | jq -r '
+              .headers | to_entries[] |
+              select(.key | ascii_downcase == "x-envoy-external-address") |
+              .value[0]')
+            [ "${EXTERNAL_ADDR}" = "${SPOOFED_IP}" ] && break
+            echo "Attempt ${i}: X-Envoy-External-Address=${EXTERNAL_ADDR}, retrying in 5s..."
             sleep 5
           done
           kill ${PF_PID} 2>/dev/null || true
 
-          EXTERNAL_ADDR=$(echo "${HEADERS}" | jq -r '
-            .headers | to_entries[] |
-            select(.key | ascii_downcase == "x-envoy-external-address") |
-            .value[0]')
           if [ "${EXTERNAL_ADDR}" != "${SPOOFED_IP}" ]; then
             echo "ERROR: expected X-Envoy-External-Address=${SPOOFED_IP}, got ${EXTERNAL_ADDR}"
             echo "Full response: ${HEADERS}"
