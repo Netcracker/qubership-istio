@@ -176,7 +176,7 @@ jobs:
           EXTERNAL_ADDR=$(echo "${HEADERS}" | jq -r '
             .headers | to_entries[] |
             select(.key | ascii_downcase == "x-envoy-external-address") |
-            .value' | head -1)
+            .value[0]')
           if [ "${EXTERNAL_ADDR}" != "${SPOOFED_IP}" ]; then
             echo "ERROR: expected X-Envoy-External-Address=${SPOOFED_IP}, got ${EXTERNAL_ADDR}"
             echo "Full response: ${HEADERS}"
@@ -225,7 +225,7 @@ jobs:
           EXTERNAL_ADDR=$(echo "${HEADERS}" | jq -r '
             .headers | to_entries[] |
             select(.key | ascii_downcase == "x-envoy-external-address") |
-            .value' | head -1)
+            .value[0]')
           if [ "${EXTERNAL_ADDR}" != "${SPOOFED_IP}" ]; then
             echo "ERROR: expected X-Envoy-External-Address=${SPOOFED_IP}, got ${EXTERNAL_ADDR}"
             echo "Full response: ${HEADERS}"
