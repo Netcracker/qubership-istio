@@ -143,7 +143,18 @@ jobs:
           kubectl rollout status deployment/httpbin -n default --timeout=120s
           kubectl wait gateway/xff-test -n istio-system --for=condition=Programmed --timeout=120s
           kubectl rollout status deployment/xff-test-istio -n istio-system --timeout=120s
-          kubectl wait httproute/httpbin -n default --for=condition=Accepted --timeout=120s
+          for i in $(seq 1 24); do
+            STATUS=$(kubectl get httproute httpbin -n default \
+              -o jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}' 2>/dev/null)
+            [ "${STATUS}" = "True" ] && { echo "HTTPRoute accepted"; break; }
+            echo "Waiting for HTTPRoute to be accepted (attempt ${i}/24)..."
+            sleep 5
+          done
+          if [ "${STATUS}" != "True" ]; then
+            echo "ERROR: HTTPRoute not accepted after timeout"
+            kubectl get httproute httpbin -n default -o yaml
+            exit 1
+          fi
 
       - name: Verify XFF numTrustedProxies=1 behavior
         run: |
