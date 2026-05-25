@@ -133,7 +133,8 @@ jobs:
             --create-namespace \
             --timeout 3m \
             --wait \
-            --force-conflicts
+            --force-conflicts \
+            --set MONITORING_ENABLED=false
             
       - name: Verify rollout
         run: |
