@@ -117,6 +117,9 @@ jobs:
             - name: http
               protocol: HTTP
               port: 80
+              allowedRoutes:
+                namespaces:
+                  from: All
           EOF
 
           kubectl apply -f - <<'EOF'
@@ -140,6 +143,7 @@ jobs:
           kubectl rollout status deployment/httpbin -n default --timeout=120s
           kubectl wait gateway/xff-test -n istio-system --for=condition=Programmed --timeout=120s
           kubectl rollout status deployment/xff-test-istio -n istio-system --timeout=120s
+          kubectl wait httproute/httpbin -n default --for=condition=Accepted --timeout=120s
 
       - name: Verify XFF numTrustedProxies=1 behavior
         run: |
