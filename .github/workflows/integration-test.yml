@@ -145,13 +145,17 @@ jobs:
         run: |
           kubectl port-forward -n istio-system svc/xff-test-istio 18080:80 &
           PF_PID=$!
-          sleep 3
 
           # With numTrustedProxies=1 Envoy treats the direct peer (the port-forward
           # connection) as the one trusted proxy hop, so X-Envoy-External-Address
           # must equal the IP we placed in X-Forwarded-For.
           SPOOFED_IP="203.0.113.1"
-          HEADERS=$(curl -sf -H "X-Forwarded-For: ${SPOOFED_IP}" http://127.0.0.1:18080/headers)
+          HEADERS=""
+          for i in $(seq 1 12); do
+            HEADERS=$(curl -sf -H "X-Forwarded-For: ${SPOOFED_IP}" http://127.0.0.1:18080/headers) && break
+            echo "Attempt ${i}: gateway not ready yet, retrying in 5s..."
+            sleep 5
+          done
           kill ${PF_PID} 2>/dev/null || true
 
           EXTERNAL_ADDR=$(echo "${HEADERS}" | jq -r '
@@ -190,13 +194,17 @@ jobs:
         run: |
           kubectl port-forward -n istio-system svc/xff-test-istio 18080:80 &
           PF_PID=$!
-          sleep 3
 
           # With numTrustedProxies=2 Envoy trusts 2 hops from the right of XFF.
           # We send 2 intermediate IPs; Envoy appends the peer, making 3 entries total.
           # X-Envoy-External-Address must be the leftmost (original client) IP.
           SPOOFED_IP="203.0.113.1"
-          HEADERS=$(curl -sf -H "X-Forwarded-For: ${SPOOFED_IP}, 10.0.0.1" http://127.0.0.1:18080/headers)
+          HEADERS=""
+          for i in $(seq 1 12); do
+            HEADERS=$(curl -sf -H "X-Forwarded-For: ${SPOOFED_IP}, 10.0.0.1" http://127.0.0.1:18080/headers) && break
+            echo "Attempt ${i}: gateway not ready yet, retrying in 5s..."
+            sleep 5
+          done
           kill ${PF_PID} 2>/dev/null || true
 
           EXTERNAL_ADDR=$(echo "${HEADERS}" | jq -r '
