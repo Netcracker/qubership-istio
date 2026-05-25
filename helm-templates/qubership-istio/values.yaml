@@ -109,6 +109,6 @@ ztunnel:
       cpu: 400m
       memory: 512Mi
 
-SERVICE_MESH_TYPE : "Istio"   # or "Core"
+monitoringScrapeInterval: 15s
+
 MONITORING_ENABLED: true
-MONITORING_SCRAPE_INTERVAL: 15s
