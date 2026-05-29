@@ -16,9 +16,10 @@ gw_pod() {
     -o jsonpath='{.items[0].metadata.name}'
 }
 
-# istiod sets proxyMetadata entries as individual env vars in the generated
-# gateway Deployment. It does NOT reconcile the Deployment when mesh config
-# changes — only when the Gateway resource itself is (re)created.
+# istiod sets proxyMetadata keys as individual env vars in the generated
+# gateway Deployment pod template. The value is baked in at Gateway creation
+# time: istiod reads its in-memory mesh config when it handles the Gateway
+# create event, so the pod reflects whatever config istiod had at that moment.
 gw_dual_stack_val() {
   local pod="$1"
   kubectl get pod "${pod}" -n "${ISTIO_NAMESPACE}" \
@@ -47,18 +48,7 @@ EOF
   kubectl rollout status "deployment/${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" --timeout=120s
 }
 
-# Delete and recreate the Gateway so istiod generates a fresh Deployment that
-# picks up the current mesh config. The old Deployment is owned by the Gateway
-# and gets garbage-collected on deletion.
-recreate_gateway() {
-  kubectl delete gateway "${GW_NAME}" -n "${ISTIO_NAMESPACE}" --ignore-not-found
-  for i in $(seq 1 12); do
-    kubectl get deployment "${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" 2>/dev/null || break
-    echo "Waiting for old gateway Deployment to be garbage collected (attempt ${i}/12)..."
-    sleep 5
-  done
-  apply_gateway
-  # Re-apply the HTTPRoute so its status is refreshed against the new Gateway.
+apply_httproute() {
   kubectl apply -f - <<EOF
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -84,8 +74,39 @@ EOF
   done
   if [ "${STATUS}" != "True" ]; then
     kubectl get httproute dual-stack-backend -n default -o yaml
-    fail "HTTPRoute not accepted after gateway recreate"
+    fail "HTTPRoute not accepted"
   fi
+}
+
+delete_gateway_and_wait_gc() {
+  kubectl delete gateway "${GW_NAME}" -n "${ISTIO_NAMESPACE}" --ignore-not-found
+  for i in $(seq 1 12); do
+    kubectl get deployment "${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" 2>/dev/null || break
+    echo "Waiting for old gateway Deployment to be garbage collected (attempt ${i}/12)..."
+    sleep 5
+  done
+}
+
+# helm upgrade --wait returns as soon as istiod is ready, but istiod processes
+# the updated mesh ConfigMap asynchronously via a watch. If we recreate the
+# Gateway before istiod has synced the new config, it generates the Deployment
+# with stale proxyMetadata. Retry up to 6 times (90 s total) to let istiod sync.
+recreate_gateway_expecting() {
+  local expected="$1"
+  local attempt val
+  for attempt in $(seq 1 6); do
+    delete_gateway_and_wait_gc
+    apply_gateway
+    val=$(gw_dual_stack_val "$(gw_pod)")
+    if [ "${val}" = "${expected}" ]; then
+      apply_httproute
+      return 0
+    fi
+    echo "Attempt ${attempt}: pod has ISTIO_DUAL_STACK=${val}, expected ${expected}." \
+         "istiod config not yet synced — waiting 15s before retry..."
+    sleep 15
+  done
+  fail "gateway pod never got ISTIO_DUAL_STACK=${expected} after 6 attempts"
 }
 
 # --- 1. Verify default ISTIO_DUAL_STACK=false in mesh config ---
@@ -105,35 +126,7 @@ kubectl expose deployment dual-stack-backend --port=80 --target-port=8080 -n def
 kubectl rollout status deployment/dual-stack-backend -n default --timeout=120s
 
 apply_gateway
-
-kubectl apply -f - <<EOF
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: dual-stack-backend
-  namespace: default
-spec:
-  parentRefs:
-  - name: ${GW_NAME}
-    namespace: ${ISTIO_NAMESPACE}
-  rules:
-  - backendRefs:
-    - name: dual-stack-backend
-      port: 80
-EOF
-
-STATUS=""
-for i in $(seq 1 24); do
-  STATUS=$(kubectl get httproute dual-stack-backend -n default \
-    -o jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}' 2>/dev/null)
-  [ "${STATUS}" = "True" ] && break
-  echo "Waiting for HTTPRoute to be accepted (attempt ${i}/24)..."
-  sleep 5
-done
-if [ "${STATUS}" != "True" ]; then
-  kubectl get httproute dual-stack-backend -n default -o yaml
-  fail "HTTPRoute not accepted"
-fi
+apply_httproute
 
 # --- 3. Verify ISTIO_DUAL_STACK=false in gateway pod env (default) ---
 GW_POD=$(gw_pod)
@@ -188,18 +181,13 @@ if [ "${DUAL_STACK_VAL}" != "true" ]; then
 fi
 echo "OK: mesh config ISTIO_DUAL_STACK=${DUAL_STACK_VAL}"
 
-# --- 8. Recreate gateway so istiod generates a fresh Deployment with new mesh config ---
-recreate_gateway
-
-# --- 9. Verify ISTIO_DUAL_STACK=true in gateway pod env ---
+# --- 8. Recreate gateway and verify new pod picks up ISTIO_DUAL_STACK=true ---
+recreate_gateway_expecting "true"
 GW_POD=$(gw_pod)
 DUAL_STACK_VAL=$(gw_dual_stack_val "${GW_POD}")
-if [ "${DUAL_STACK_VAL}" != "true" ]; then
-  fail "gateway pod ISTIO_DUAL_STACK: expected 'true', got '${DUAL_STACK_VAL}'"
-fi
 echo "OK: gateway pod ISTIO_DUAL_STACK=${DUAL_STACK_VAL}"
 
-# --- 10. Verify gateway outbound listener has IPv6 socket ---
+# --- 9. Verify gateway outbound listener has IPv6 socket ---
 # Port 15001 (outbound) in hex = 0x3A98
 IPV6_LISTENER=""
 for i in $(seq 1 6); do
@@ -215,7 +203,7 @@ if [ -z "${IPV6_LISTENER}" ]; then
 fi
 [ -n "${IPV6_LISTENER}" ] && echo "OK: gateway proxy is listening on IPv6 (port 15001)"
 
-# --- 11. IPv4 still works after enabling dual-stack ---
+# --- 10. IPv4 still works after enabling dual-stack ---
 CURL_EXIT=1
 for i in $(seq 1 12); do
   kubectl port-forward -n "${ISTIO_NAMESPACE}" "svc/${GW_NAME}-istio" 18081:80 >/dev/null 2>&1 &
@@ -234,7 +222,7 @@ if [ ${CURL_EXIT} -ne 0 ]; then
 fi
 echo "OK: IPv4 gateway connectivity still works with dual-stack enabled"
 
-# --- 12. IPv6 traffic through gateway (dual-stack clusters only) ---
+# --- 11. IPv6 traffic through gateway (dual-stack clusters only) ---
 if [ "${CLUSTER_HAS_IPV6}" = "true" ]; then
   CURL_EXIT=1
   for i in $(seq 1 12); do
@@ -250,12 +238,12 @@ if [ "${CLUSTER_HAS_IPV6}" = "true" ]; then
   echo "OK: IPv6 traffic flows through gateway"
 fi
 
-# --- 13. Restore default ---
+# --- 12. Restore default ---
 helm upgrade "${HELM_RELEASE}" "${HELM_CHART_PATH}" \
   --namespace "${ISTIO_NAMESPACE}" \
   --timeout 3m \
   --wait \
   --reuse-values \
   --set 'istiod.meshConfig.defaultConfig.proxyMetadata.ISTIO_DUAL_STACK=false'
-recreate_gateway
+recreate_gateway_expecting "false"
 echo "OK: ISTIO_DUAL_STACK restored to false"
