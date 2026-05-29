@@ -26,6 +26,31 @@ gw_dual_stack_val() {
   | jq -r '.[] | select(.name=="PROXY_CONFIG") | .value | fromjson | .proxyMetadata.ISTIO_DUAL_STACK'
 }
 
+# Wait for istiod to reconcile the gateway Deployment pod template so that
+# PROXY_CONFIG.proxyMetadata.ISTIO_DUAL_STACK equals the expected value.
+# Annotating the Gateway triggers the istiod gateway controller to re-reconcile,
+# re-reading the current mesh config and updating PROXY_CONFIG in the pod template.
+# Only after the template changes does Kubernetes create new pods with the new value.
+wait_gw_template_dual_stack() {
+  local expected="$1"
+  kubectl annotate gateway "${GW_NAME}" -n "${ISTIO_NAMESPACE}" \
+    "reconcile-at=$(date +%s)" --overwrite
+  local val=""
+  for i in $(seq 1 30); do
+    val=$(kubectl get deployment "${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" \
+      -o jsonpath='{.spec.template.spec.containers[?(@.name=="istio-proxy")].env}' \
+      | jq -r '.[] | select(.name=="PROXY_CONFIG") | .value | fromjson | .proxyMetadata.ISTIO_DUAL_STACK' \
+      2>/dev/null || echo "")
+    [ "${val}" = "${expected}" ] && return 0
+    echo "Waiting for istiod to update gateway Deployment PROXY_CONFIG (attempt ${i}/30, current=${val})..."
+    sleep 5
+  done
+  echo "ERROR: gateway Deployment PROXY_CONFIG still has ISTIO_DUAL_STACK=${val}, expected ${expected}"
+  kubectl get deployment "${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" \
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="istio-proxy")].env}' || true
+  return 1
+}
+
 # --- 1. Verify default ISTIO_DUAL_STACK=false in mesh config ---
 MESH_CONFIG=$(kubectl get configmap istio -n "${ISTIO_NAMESPACE}" -o jsonpath='{.data.mesh}')
 DUAL_STACK_VAL=$(echo "${MESH_CONFIG}" | yq e '.defaultConfig.proxyMetadata.ISTIO_DUAL_STACK')
@@ -101,10 +126,10 @@ echo "OK: gateway pod ISTIO_DUAL_STACK=${DUAL_STACK_VAL} (default)"
 
 # --- 4. Baseline: IPv4 traffic flows through gateway ---
 for i in $(seq 1 12); do
-  kubectl port-forward -n "${ISTIO_NAMESPACE}" "svc/${GW_NAME}-istio" 18081:80 &
+  kubectl port-forward -n "${ISTIO_NAMESPACE}" "svc/${GW_NAME}-istio" 18081:80 >/dev/null 2>&1 &
   PF_PID=$!
   sleep 2
-  RESPONSE=$(curl -sf http://127.0.0.1:18081/get 2>/dev/null)
+  curl -sf http://127.0.0.1:18081/get > /dev/null
   CURL_EXIT=$?
   kill "${PF_PID}" 2>/dev/null || true
   wait "${PF_PID}" 2>/dev/null || true
@@ -134,10 +159,6 @@ helm upgrade "${HELM_RELEASE}" "${HELM_CHART_PATH}" \
   --wait \
   --reuse-values \
   --set 'istiod.meshConfig.defaultConfig.proxyMetadata.ISTIO_DUAL_STACK=true'
-# proxyMetadata is baked into PROXY_CONFIG at pod injection time, not pushed via xDS.
-# The mesh ConfigMap changed but existing pods still carry the old value — restart them.
-kubectl rollout restart "deployment/${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}"
-kubectl rollout status "deployment/${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" --timeout=120s
 
 # --- 7. Verify mesh config updated ---
 MESH_CONFIG=$(kubectl get configmap istio -n "${ISTIO_NAMESPACE}" -o jsonpath='{.data.mesh}')
@@ -147,7 +168,14 @@ if [ "${DUAL_STACK_VAL}" != "true" ]; then
 fi
 echo "OK: mesh config ISTIO_DUAL_STACK=${DUAL_STACK_VAL}"
 
-# --- 8. Verify ISTIO_DUAL_STACK=true in gateway pod PROXY_CONFIG after restart ---
+# --- 8. Wait for istiod to propagate new mesh config to the gateway Deployment ---
+# PROXY_CONFIG is set in the Deployment pod template by istiod's gateway controller.
+# Annotating the Gateway triggers a reconcile; only after the template changes does
+# Kubernetes roll new pods. A manual rollout restart would use the stale template.
+wait_gw_template_dual_stack "true"
+kubectl rollout status "deployment/${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" --timeout=120s
+
+# --- 9. Verify ISTIO_DUAL_STACK=true in gateway pod PROXY_CONFIG after rollout ---
 GW_POD=$(gw_pod)
 DUAL_STACK_VAL=$(gw_dual_stack_val "${GW_POD}")
 if [ "${DUAL_STACK_VAL}" != "true" ]; then
@@ -155,7 +183,7 @@ if [ "${DUAL_STACK_VAL}" != "true" ]; then
 fi
 echo "OK: gateway pod ISTIO_DUAL_STACK=${DUAL_STACK_VAL}"
 
-# --- 9. Verify gateway HBONE / outbound listener has IPv6 socket ---
+# --- 10. Verify gateway HBONE / outbound listener has IPv6 socket ---
 # Port 15001 (outbound) in hex = 0x3A98
 # When ISTIO_DUAL_STACK=true the gateway proxy (Envoy) binds on :: for outbound capture.
 IPV6_LISTENER=""
@@ -172,10 +200,10 @@ if [ -z "${IPV6_LISTENER}" ]; then
 fi
 [ -n "${IPV6_LISTENER}" ] && echo "OK: gateway proxy is listening on IPv6 (port 15001)"
 
-# --- 10. IPv4 still works after enabling dual-stack ---
+# --- 11. IPv4 still works after enabling dual-stack ---
 CURL_EXIT=1
 for i in $(seq 1 12); do
-  kubectl port-forward -n "${ISTIO_NAMESPACE}" "svc/${GW_NAME}-istio" 18081:80 &
+  kubectl port-forward -n "${ISTIO_NAMESPACE}" "svc/${GW_NAME}-istio" 18081:80 >/dev/null 2>&1 &
   PF_PID=$!
   sleep 2
   curl -sf http://127.0.0.1:18081/get > /dev/null
@@ -191,11 +219,11 @@ if [ ${CURL_EXIT} -ne 0 ]; then
 fi
 echo "OK: IPv4 gateway connectivity still works with dual-stack enabled"
 
-# --- 11. IPv6 traffic through gateway (dual-stack clusters only) ---
+# --- 12. IPv6 traffic through gateway (dual-stack clusters only) ---
 if [ "${CLUSTER_HAS_IPV6}" = "true" ]; then
   CURL_EXIT=1
   for i in $(seq 1 12); do
-    RESPONSE=$(curl -sf -6 "http://[${GW_SVC_IPV6}]/get" 2>/dev/null)
+    curl -sf -6 "http://[${GW_SVC_IPV6}]/get" > /dev/null
     CURL_EXIT=$?
     [ ${CURL_EXIT} -eq 0 ] && break
     echo "Attempt ${i}: waiting for gateway (IPv6)..."
@@ -207,13 +235,13 @@ if [ "${CLUSTER_HAS_IPV6}" = "true" ]; then
   echo "OK: IPv6 traffic flows through gateway"
 fi
 
-# --- 12. Restore default ---
+# --- 13. Restore default ---
 helm upgrade "${HELM_RELEASE}" "${HELM_CHART_PATH}" \
   --namespace "${ISTIO_NAMESPACE}" \
   --timeout 3m \
   --wait \
   --reuse-values \
   --set 'istiod.meshConfig.defaultConfig.proxyMetadata.ISTIO_DUAL_STACK=false'
-kubectl rollout restart "deployment/${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}"
+wait_gw_template_dual_stack "false"
 kubectl rollout status "deployment/${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" --timeout=120s
 echo "OK: ISTIO_DUAL_STACK restored to false"
