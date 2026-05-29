@@ -16,6 +16,16 @@ gw_pod() {
     -o jsonpath='{.items[0].metadata.name}'
 }
 
+# Read ISTIO_DUAL_STACK from a gateway pod's PROXY_CONFIG env var.
+# proxyMetadata values are baked into PROXY_CONFIG JSON at injection time,
+# not exposed as individual env vars.
+gw_dual_stack_val() {
+  local pod="$1"
+  kubectl get pod "${pod}" -n "${ISTIO_NAMESPACE}" \
+    -o jsonpath='{.spec.containers[?(@.name=="istio-proxy")].env}' \
+  | jq -r '.[] | select(.name=="PROXY_CONFIG") | .value | fromjson | .proxyMetadata.ISTIO_DUAL_STACK'
+}
+
 # --- 1. Verify default ISTIO_DUAL_STACK=false in mesh config ---
 MESH_CONFIG=$(kubectl get configmap istio -n "${ISTIO_NAMESPACE}" -o jsonpath='{.data.mesh}')
 DUAL_STACK_VAL=$(echo "${MESH_CONFIG}" | yq e '.defaultConfig.proxyMetadata.ISTIO_DUAL_STACK')
@@ -81,11 +91,9 @@ if [ "${STATUS}" != "True" ]; then
   fail "HTTPRoute not accepted"
 fi
 
-# --- 3. Verify ISTIO_DUAL_STACK=false in gateway pod env ---
+# --- 3. Verify ISTIO_DUAL_STACK=false in gateway pod PROXY_CONFIG ---
 GW_POD=$(gw_pod)
-GW_ENV=$(kubectl get pod "${GW_POD}" -n "${ISTIO_NAMESPACE}" \
-  -o jsonpath='{.spec.containers[?(@.name=="istio-proxy")].env}')
-DUAL_STACK_VAL=$(echo "${GW_ENV}" | jq -r '.[] | select(.name=="ISTIO_DUAL_STACK") | .value')
+DUAL_STACK_VAL=$(gw_dual_stack_val "${GW_POD}")
 if [ "${DUAL_STACK_VAL}" != "false" ]; then
   fail "gateway pod ISTIO_DUAL_STACK: expected 'false', got '${DUAL_STACK_VAL}'"
 fi
@@ -126,6 +134,9 @@ helm upgrade "${HELM_RELEASE}" "${HELM_CHART_PATH}" \
   --wait \
   --reuse-values \
   --set 'istiod.meshConfig.defaultConfig.proxyMetadata.ISTIO_DUAL_STACK=true'
+# proxyMetadata is baked into PROXY_CONFIG at pod injection time, not pushed via xDS.
+# The mesh ConfigMap changed but existing pods still carry the old value — restart them.
+kubectl rollout restart "deployment/${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}"
 kubectl rollout status "deployment/${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" --timeout=120s
 
 # --- 7. Verify mesh config updated ---
@@ -136,11 +147,9 @@ if [ "${DUAL_STACK_VAL}" != "true" ]; then
 fi
 echo "OK: mesh config ISTIO_DUAL_STACK=${DUAL_STACK_VAL}"
 
-# --- 8. Verify ISTIO_DUAL_STACK=true in gateway pod env after rollout ---
+# --- 8. Verify ISTIO_DUAL_STACK=true in gateway pod PROXY_CONFIG after restart ---
 GW_POD=$(gw_pod)
-GW_ENV=$(kubectl get pod "${GW_POD}" -n "${ISTIO_NAMESPACE}" \
-  -o jsonpath='{.spec.containers[?(@.name=="istio-proxy")].env}')
-DUAL_STACK_VAL=$(echo "${GW_ENV}" | jq -r '.[] | select(.name=="ISTIO_DUAL_STACK") | .value')
+DUAL_STACK_VAL=$(gw_dual_stack_val "${GW_POD}")
 if [ "${DUAL_STACK_VAL}" != "true" ]; then
   fail "gateway pod ISTIO_DUAL_STACK: expected 'true', got '${DUAL_STACK_VAL}'"
 fi
@@ -205,5 +214,6 @@ helm upgrade "${HELM_RELEASE}" "${HELM_CHART_PATH}" \
   --wait \
   --reuse-values \
   --set 'istiod.meshConfig.defaultConfig.proxyMetadata.ISTIO_DUAL_STACK=false'
+kubectl rollout restart "deployment/${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}"
 kubectl rollout status "deployment/${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" --timeout=120s
 echo "OK: ISTIO_DUAL_STACK restored to false"
