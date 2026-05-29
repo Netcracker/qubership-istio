@@ -150,16 +150,19 @@ else
   echo "Cluster is single-stack (IPv4 only) — IPv6 gateway connectivity test will be skipped"
 fi
 
-# --- 6. Enable ISTIO_DUAL_STACK via istiod pilot env (restarts istiod) ---
-# istiod.env.ISTIO_DUAL_STACK changes the istiod Deployment spec, triggering a
-# rollout. After --wait, istiod is running with the new flag and will inject
-# ISTIO_DUAL_STACK=true into every new gateway Deployment it creates.
+# --- 6. Enable ISTIO_DUAL_STACK (both knobs must change together) ---
+# istiod.env.ISTIO_DUAL_STACK mutates the istiod pod template → istiod restarts.
+# meshConfig.defaultConfig.proxyMetadata.ISTIO_DUAL_STACK carries the value into
+# gateway pods via ProxyConfig.ProxyMetadata (kube-gateway.yaml).
+# A restarted istiod re-reads the mesh ConfigMap and reconciles existing gateway
+# Deployments with the new ProxyConfig — wait for that rollout to finish.
 helm upgrade "${HELM_RELEASE}" "${HELM_CHART_PATH}" \
   --namespace "${ISTIO_NAMESPACE}" \
   --timeout 3m \
   --wait \
   --reuse-values \
-  --set 'istiod.env.ISTIO_DUAL_STACK=true'
+  --set 'istiod.env.ISTIO_DUAL_STACK=true' \
+  --set 'istiod.meshConfig.defaultConfig.proxyMetadata.ISTIO_DUAL_STACK=true'
 kubectl rollout status deployment/istiod -n "${ISTIO_NAMESPACE}" --timeout=120s
 
 # --- 7. Verify istiod Deployment env updated ---
@@ -169,12 +172,22 @@ if [ "${DUAL_STACK_VAL}" != "true" ]; then
 fi
 echo "OK: istiod ISTIO_DUAL_STACK=${DUAL_STACK_VAL}"
 
-# --- 8. Recreate gateway so istiod generates a fresh Deployment with new flag ---
-recreate_gateway
-
-# --- 9. Verify ISTIO_DUAL_STACK=true propagated to new gateway pod ---
+# --- 8. Wait for istiod to reconcile the gateway Deployment, recreate if needed ---
+# After restart, istiod reconciles all managed Gateways and updates their
+# Deployment pod template. If the reconciliation rollout completes and the pod
+# still shows the old value (e.g. a version that doesn't auto-reconcile),
+# fall back to a Gateway recreate so the fresh Deployment picks up the new config.
+kubectl rollout status "deployment/${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" --timeout=120s
 GW_POD=$(gw_pod)
 DUAL_STACK_VAL=$(gw_dual_stack_val "${GW_POD}")
+if [ "${DUAL_STACK_VAL}" != "true" ]; then
+  echo "Gateway Deployment was not auto-reconciled — recreating Gateway..."
+  recreate_gateway
+  GW_POD=$(gw_pod)
+  DUAL_STACK_VAL=$(gw_dual_stack_val "${GW_POD}")
+fi
+
+# --- 9. Verify ISTIO_DUAL_STACK=true in gateway pod ---
 if [ "${DUAL_STACK_VAL}" != "true" ]; then
   fail "gateway pod ISTIO_DUAL_STACK: expected 'true', got '${DUAL_STACK_VAL}'"
 fi
@@ -237,7 +250,8 @@ helm upgrade "${HELM_RELEASE}" "${HELM_CHART_PATH}" \
   --timeout 3m \
   --wait \
   --reuse-values \
-  --set 'istiod.env.ISTIO_DUAL_STACK=false'
+  --set 'istiod.env.ISTIO_DUAL_STACK=false' \
+  --set 'istiod.meshConfig.defaultConfig.proxyMetadata.ISTIO_DUAL_STACK=false'
 kubectl rollout status deployment/istiod -n "${ISTIO_NAMESPACE}" --timeout=120s
-recreate_gateway
+kubectl rollout status "deployment/${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" --timeout=120s || recreate_gateway
 echo "OK: ISTIO_DUAL_STACK restored to false"

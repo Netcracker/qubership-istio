@@ -72,10 +72,19 @@ istiod:
   base:
     validationFailurePolicy: Fail    
 
-  # env vars on the istiod Deployment itself (pilot feature flags).
-  # ISTIO_DUAL_STACK here controls dual-stack support for Gateway API gateway pods:
-  # istiod reads this flag at startup and injects it into every gateway Deployment
-  # it manages via ProxyConfig.ProxyMetadata in kube-gateway.yaml.
+  # ISTIO_DUAL_STACK requires two coordinated settings:
+  #
+  # 1. meshConfig.defaultConfig.proxyMetadata.ISTIO_DUAL_STACK
+  #    Carries the value into gateway pods via ProxyConfig.ProxyMetadata
+  #    (kube-gateway.yaml iterates this map and emits one env var per entry).
+  #
+  # 2. env.ISTIO_DUAL_STACK (istiod Deployment env var)
+  #    Changing this mutates the istiod pod template, which restarts istiod.
+  #    Only a restarted istiod re-reads the mesh ConfigMap and reconciles
+  #    existing gateway Deployments with the updated ProxyConfig.ProxyMetadata.
+  #
+  # Both must be changed together so that: (a) the new value is in the mesh
+  # config, and (b) istiod restarts and propagates it to gateway pods.
   env:
     ISTIO_DUAL_STACK: "false"
 
@@ -84,6 +93,8 @@ istiod:
     defaultConfig:
       gatewayTopology:
         numTrustedProxies: 1
+      proxyMetadata:
+        ISTIO_DUAL_STACK: "false"
 
   gatewayClasses:
     istio:
