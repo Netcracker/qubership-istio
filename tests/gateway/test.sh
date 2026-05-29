@@ -19,13 +19,11 @@ gw_pod() {
 
 curl_gw() {
   local path="${1:-/get}"
-  local extra_args="${2:-}"
   local port=18082
-  kubectl port-forward -n "${ISTIO_NAMESPACE}" "svc/${GW_NAME}-istio" "${port}:80" &
+  kubectl port-forward -n "${ISTIO_NAMESPACE}" "svc/${GW_NAME}-istio" "${port}:80" >/dev/null 2>&1 &
   local pf_pid=$!
   sleep 2
-  # shellcheck disable=SC2086
-  curl -sf ${extra_args} "http://127.0.0.1:${port}${path}"
+  curl -sf "${@:2}" "http://127.0.0.1:${port}${path}"
   local exit_code=$?
   kill "${pf_pid}" 2>/dev/null || true
   wait "${pf_pid}" 2>/dev/null || true
@@ -134,7 +132,7 @@ echo "OK: HTTP traffic flows through gateway"
 # ---------------------------------------------------------------------------
 STATUS_CODE=""
 for i in $(seq 1 6); do
-  STATUS_CODE=$(curl_gw /status/418 "-o /dev/null -w %{http_code}" 2>/dev/null) && break
+  STATUS_CODE=$(curl_gw /status/418 -o /dev/null -w '%{http_code}') && break
   sleep 5
 done
 if [ "${STATUS_CODE}" != "418" ]; then
@@ -147,7 +145,7 @@ echo "OK: path-based routing works (HTTP 418 returned)"
 # ---------------------------------------------------------------------------
 HEADERS=""
 for i in $(seq 1 6); do
-  HEADERS=$(curl_gw /headers "-H 'X-Test-Header: gateway-test'" 2>/dev/null) && break
+  HEADERS=$(curl_gw /headers -H 'X-Test-Header: gateway-test') && break
   sleep 5
 done
 HEADER_VAL=$(echo "${HEADERS}" | jq -r '
