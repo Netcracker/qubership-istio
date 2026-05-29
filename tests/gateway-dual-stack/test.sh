@@ -162,7 +162,7 @@ helm upgrade "${HELM_RELEASE}" "${HELM_CHART_PATH}" \
   --wait \
   --reuse-values \
   --set 'istiod.env.ISTIO_DUAL_STACK=true' \
-  --set 'istiod.meshConfig.defaultConfig.proxyMetadata.ISTIO_DUAL_STACK=true'
+  --set-string 'istiod.meshConfig.defaultConfig.proxyMetadata.ISTIO_DUAL_STACK=true'
 kubectl rollout status deployment/istiod -n "${ISTIO_NAMESPACE}" --timeout=120s
 
 # --- 7. Verify istiod Deployment env updated ---
@@ -251,7 +251,7 @@ helm upgrade "${HELM_RELEASE}" "${HELM_CHART_PATH}" \
   --wait \
   --reuse-values \
   --set 'istiod.env.ISTIO_DUAL_STACK=false' \
-  --set 'istiod.meshConfig.defaultConfig.proxyMetadata.ISTIO_DUAL_STACK=false'
+  --set-string 'istiod.meshConfig.defaultConfig.proxyMetadata.ISTIO_DUAL_STACK=false'
 kubectl rollout status deployment/istiod -n "${ISTIO_NAMESPACE}" --timeout=120s
 kubectl rollout status "deployment/${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" --timeout=120s || recreate_gateway
 echo "OK: ISTIO_DUAL_STACK restored to false"
