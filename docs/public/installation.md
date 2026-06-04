@@ -1,10 +1,21 @@
-# Qubership Istio Installation Notes
-
 <!-- TOC -->
+- [Prerequisites](#prerequisites)
+  - [Common](#common)
+  - [Kubernetes](#kubernetes)
+- [Best practices and recommendations](#best-practices-and-recommendations)
+  - [HWE](#hwe)
+- [Parameters](#parameters)
+  - [qubership-istio](#qubership-istio)
+- [Installation](#installation)
+  - [Before you begin](#before-you-begin)
+  - [On-prem](#on-prem)
+- [Upgrade](#upgrade)
+- [Rollback](#rollback)
+<!-- /TOC -->
 
-## General Information
-
-This is Qubership Istio Ambient Mesh Distribution. It includes vanilla Istio Ambient Mode helm charts with minimal modifications. 
+# Prerequisites
+## Common
+This is Qubership Istio Ambient Mesh Distribution. It includes vanilla Istio Ambient Mode helm charts with minimal modifications.
 
 This distribution Helm chart has the following structure:
 
@@ -14,130 +25,54 @@ This distribution Helm chart has the following structure:
   - `ztunnel` - Istio ztunnel.
   - `istiod` - istiod (pilot) - Istio control plane.
 
-## Prerequisites
-
-This section describes prerequsites for Qubership Istio distribution. 
-
-### Third-Party Software
-
-#### Helm
-
 Installation should be performed with Helm version 3.6+ or Helm version 4.
-
-#### Kubernetes Version
-
-Supported k8s versions: 1.31, 1.32, 1.33, 1.34, 1.35.
-
-#### Kubernetes Gateway API CRDs
-
-Kubernetes Gateway API CRDs are not included into this distro - they should be preinstalled on the cluster.
-
-### Kubernetes RBAC Configuration
 
 Qubership Istio should be installed under the service account with cluster-admin permissions in kubernetes.
 
-## Deployment
+## Kubernetes
+Supported k8s versions: 1.31, 1.32, 1.33, 1.34, 1.35.
 
-### Layout
+Kubernetes Gateway API CRDs are not included into this distro - they should be preinstalled on the cluster.
 
-Qubership Istio distro should always be installed into `istio-system` namespace. No other applications should be installed in this namespace. Only single instance of Qubership Istio must be installed on kubernetes cluster. 
+# Best practices and recommendations
+## HWE
+### Small
+Recommended for development purposes, PoC and demos
 
-### HWE
+|Module      |CPU req|CPU lim|RAM req, Mi|RAM lim, Mi|
+|------------|-------|-------|-----------|-----------|
+|cni         |100m   |200m   |100        |500        |
+|istiod      |500m   |1000m  |2048       |2048       |
+|ztunnel     |100m   |1000m  |256        |1024       |
+|**Total**   |**700m**|**2200m**|**2404** |**3572**   |
 
-#### Small
+### Medium
+Recommended for deployments with average load.
 
-cni:
-  resources:
-    requests:
-      cpu: 100m
-      memory: 100Mi
-    limits:
-      cpu: 200m
-      memory: 500Mi
+|Module      |CPU req|CPU lim|RAM req, Mi|RAM lim, Mi|
+|------------|-------|-------|-----------|-----------|
+|cni         |100m   |400m   |256        |1024       |
+|istiod      |500m   |1000m  |2048       |3072       |
+|ztunnel     |4000m  |8000m  |1024       |3072       |
+|**Total**   |**4600m**|**9400m**|**3328**|**7168**   |
 
-istiod:
-  resources:
-    requests:
-      cpu: 500m
-      memory: 2048Mi
-    limits:
-      cpu: 1000m
-      memory: 2048Mi
+### Large
+Recommended for deployments with high workload and large amount of data.
 
-ztunnel:
-  resources:
-    requests:
-      cpu: 100m
-      memory: 256Mi
-    limits:
-      cpu: 1000m
-      memory: 1024Mi
+|Module      |CPU req|CPU lim|RAM req, Mi|RAM lim, Mi|
+|------------|-------|-------|-----------|-----------|
+|cni         |100m   |400m   |256        |1024       |
+|istiod      |500m   |4000m  |2048       |5120       |
+|ztunnel     |4000m  |8000m  |1024       |3072       |
+|**Total**   |**4600m**|**12400m**|**3328**|**9216**  |
 
-#### Medium
+# Parameters
+## qubership-istio
+|Parameter          |Type   |Mandatory|Default value|Description                                                                                 |
+|-------------------|-------|---------|-------------|--------------------------------------------------------------------------------------------|
+|MONITORING_ENABLED |boolean|no       |true         |Flag to install custom resources (PodMonitor and grafana dashboard) for prometheus monitoring|
 
-cni:
-  resources:
-    requests:
-      cpu: 100m
-      memory: 256Mi
-    limits:
-      cpu: 400m
-      memory: 1Gi
-istiod:
-  resources:
-    requests:
-      cpu: 500m
-      memory: 2Gi
-    limits:
-      cpu: 1
-      memory: 3Gi
-ztunnel:
-  resources:
-    requests:
-      cpu: 4
-      memory: 1Gi
-    limits:
-      cpu: 8
-      memory: 3Gi
-
-#### Large
-
-cni:
-  resources:
-    requests:
-      cpu: 100m
-      memory: 256Mi
-    limits:
-      cpu: 400m
-      memory: 1Gi
-istiod:
-  resources:
-    requests:
-      cpu: 500m
-      memory: 2Gi
-    limits:
-      cpu: 4
-      memory: 5Gi
-ztunnel:
-  resources:
-    requests:
-      cpu: 4
-      memory: 1Gi
-    limits:
-      cpu: 8
-      memory: 3Gi
-
-### Deploy Parameters
-
-#### Qubership Specific Parameters
-
-| Name | Default Value | Description |
-|------|---------------|-------------|
-| MONITORING_ENABLED | `true`| Flag to install custom resources (PodMonitor and grafana dashboard) for prometheus monitoring. |
-
-#### Vanilla Istio Parameters
-
-In Helm values you can provide any configuration parameters supported by corresponding vanilla Istio helm chart, e.g. to set default connectTimeout for `istiod` you can set the following: 
+In Helm values you can provide any configuration parameters supported by corresponding vanilla Istio helm chart, e.g. to set default connectTimeout for `istiod`:
 ```yaml
 qubership-istio: # root helm chart
   istiod: # nested helm chart
@@ -146,20 +81,27 @@ qubership-istio: # root helm chart
         connectTimeout: 5s
 ```
 
-## Namespace Enrollment into Istio Ambient Mesh
+# Installation
+## Before you begin
+Qubership Istio distro should always be installed into `istio-system` namespace. No other applications should be installed in this namespace. Only single instance of Qubership Istio must be installed on kubernetes cluster.
 
-### Creating New Namespace
+### Helm
+Install via Helm into `istio-system` namespace.
 
-When creating new namespace that should be enrolled into Istio Ambient Mesh, specify the following labels on the namespace: 
+## On-prem
+### HA scheme
+Not applicable
+### DR scheme
+Not applicable
+### Non-HA scheme
+Not applicable
 
-* `istio.io/dataplane-mode`: `ambient`
-* `istio.io/use-waypoint`: `waypoint`
+# Upgrade
+Install and upgrade procedures are identical.
 
-### Existing Namespace Enrollment
+# Rollback
+Install via Helm with the previous version.
 
-In order to enroll existing namespace into Istio Ambient Mesh follow the steps below: 
+# See also
 
-1. Add these two labels to namespace: 
-  * `istio.io/dataplane-mode`: `ambient`
-  * `istio.io/use-waypoint`: `waypoint`
-2. Restart all workloads in namespace.
+* [Namespace Enrollment into Istio Ambient Mesh](namespace-enrollment.md)
