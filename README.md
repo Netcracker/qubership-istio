@@ -60,7 +60,8 @@ A scratch Docker image (`qubership-istio-transfer`) is built and pushed to `ghcr
 
 ## Documentation
 
-- [Installation Notes](docs/public/installation.md) — prerequisites, HWE presets (Small/Medium/Large), full parameter reference, namespace enrollment
+- [Installation Notes](docs/public/installation.md) — prerequisites, HWE presets (Small/Medium/Large), full parameter reference
+- [Namespace Enrollment](docs/public/namespace-enrollment.md) — how to enroll namespaces into the ambient mesh
 - [Hardware sizing model](docs/internal/hardware-sizing-model.md) — capacity planning formulas for ztunnel, istiod, waypoint, and CNI
 - [Contributing](CONTRIBUTING.md)
 - [Security](SECURITY.md)
