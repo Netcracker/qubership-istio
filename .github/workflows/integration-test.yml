@@ -84,7 +84,9 @@ jobs:
         run: ct lint --all --chart-dirs ./helm-templates-extracted/qubership-istio
 
       # kind needs IPv6 enabled in the Docker daemon for ipv6/dual clusters.
-      # Merge into the runner's existing daemon.json rather than overwrite it.
+      # Merge into the runner's existing daemon.json rather than overwrite it,
+      # then VERIFY ipv6 actually came up — otherwise kind would silently
+      # produce an IPv4-only cluster.
       - name: Enable IPv6 in Docker
         if: matrix.ip_family != 'ipv4'
         run: |
@@ -95,16 +97,31 @@ jobs:
             | sudo tee /etc/docker/daemon.json
           sudo systemctl restart docker
           for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
+          echo "--- /etc/docker/daemon.json ---"; sudo cat /etc/docker/daemon.json
+          enabled=$(docker network inspect bridge -f '{{.EnableIPv6}}' 2>/dev/null || echo unknown)
+          echo "default bridge EnableIPv6=${enabled}"
+          if [ "${enabled}" != "true" ]; then
+            echo "::error::Docker IPv6 did not enable; kind cannot build an ${{ matrix.ip_family }} cluster"
+            docker info 2>&1 | grep -i ipv6 || true
+            exit 1
+          fi
 
       # Install kind/kubectl only, then create the cluster explicitly so the
-      # ipFamily config is guaranteed to reach kind.
+      # ipFamily config is guaranteed to reach kind. Verbose so the rendered
+      # networking is visible in the logs.
       - name: Install kind and kubectl
         uses: helm/kind-action@v1
         with:
           install_only: true
 
       - name: Create kind cluster (${{ matrix.name }})
-        run: kind create cluster --name istio-test --config "${{ matrix.kind_config }}" --wait 120s
+        run: |
+          kind version
+          echo "--- ${{ matrix.kind_config }} ---"
+          cat "${{ matrix.kind_config }}"
+          echo "---"
+          kind create cluster --name istio-test --config "${{ matrix.kind_config }}" --wait 120s --verbosity 1
+          kubectl get nodes -o wide
 
       # Fail fast (with the actual clusterIPs) if the cluster did not come up
       # in the IP family this job expects.
