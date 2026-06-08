@@ -5,6 +5,29 @@ on:
 jobs:
   integration-test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Single-stack IPv4: Envoy gateway dns_lookup_family must be V4_ONLY,
+          # IPv4 works, no IPv6 path. Istio auto-detects the stack (no flag).
+          - ip_family: ipv4
+            kind_config: tests/kind-ipv4.yaml
+            test_filter: gateway-ip-family
+            require_dual_stack: "false"
+          # Single-stack IPv6: dns_lookup_family must be V6_ONLY, IPv6 works.
+          # Istio auto-detects the stack (no flag).
+          - ip_family: ipv6
+            kind_config: tests/kind-ipv6.yaml
+            test_filter: gateway-ip-family
+            require_dual_stack: "false"
+          # Dual-stack: ISTIO_DUAL_STACK gates the behaviour. Runs the full
+          # suite (gateway-ip-family dual branch + ztunnel-dual-stack + others).
+          - ip_family: dual
+            kind_config: tests/kind-dual-stack.yaml
+            test_filter: "*"
+            require_dual_stack: "true"
+    name: integration-test (${{ matrix.ip_family }})
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -46,10 +69,22 @@ jobs:
       - name: Run ct lint
         run: ct lint --all --chart-dirs ./helm-templates-extracted/qubership-istio
 
-      - name: Create kind cluster
+      # kind needs IPv6 enabled in the Docker daemon for ipv6/dual clusters.
+      - name: Enable IPv6 in Docker
+        if: matrix.ip_family != 'ipv4'
+        run: |
+          sudo mkdir -p /etc/docker
+          echo '{"ipv6": true, "fixed-cidr-v6": "fd00:dead:beef::/48", "ip6tables": true, "experimental": true}' \
+            | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+          # wait for the daemon to come back
+          for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
+
+      - name: Create kind cluster (${{ matrix.ip_family }})
         uses: helm/kind-action@v1
         with:
           cluster_name: istio-test
+          config: ${{ matrix.kind_config }}
 
       - name: Install Gateway API CRDs
         run: kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
@@ -64,8 +99,13 @@ jobs:
             --force-conflicts \
             --set MONITORING_ENABLED=false
 
-      - name: Run integration tests
-        run: bash tests/test-suite.sh ./helm-templates-extracted/qubership-istio
+      # On the dual-stack cluster REQUIRE_DUAL_STACK=true turns skipped IPv6
+      # checks into hard failures. The test_filter scopes which tests run per
+      # stack (single-stack runs only the stack-aware gateway test).
+      - name: Run integration tests (${{ matrix.ip_family }})
+        env:
+          REQUIRE_DUAL_STACK: ${{ matrix.require_dual_stack }}
+        run: bash tests/test-suite.sh ./helm-templates-extracted/qubership-istio '${{ matrix.test_filter }}'
 
       - name: Dump state on failure
         if: failure()
@@ -82,6 +122,6 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: istio-debug-${{ github.run_id }}
+          name: istio-debug-${{ matrix.ip_family }}-${{ github.run_id }}
           path: /tmp/istio-debug/
           retention-days: 7

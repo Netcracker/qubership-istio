@@ -1,0 +1,10 @@
+# Single-stack IPv6 kind cluster. Pods and Services get IPv6 addresses only.
+# Istio auto-detects the IPv6 stack and configures the Envoy gateway with
+# dns_lookup_family=V6_ONLY without any ISTIO_DUAL_STACK setting.
+#
+# Requires IPv6 to be enabled in the Docker daemon on the host (the
+# integration-test workflow does this before creating the cluster).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  ipFamily: ipv6

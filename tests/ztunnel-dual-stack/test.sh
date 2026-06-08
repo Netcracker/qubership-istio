@@ -3,6 +3,11 @@ set -eux
 
 NS=dual-stack-test
 
+# When REQUIRE_DUAL_STACK=true (set by CI, which runs on a dual-stack kind
+# cluster) a missing IPv6 path is a hard failure instead of a skip. Left unset
+# for local runs against single-stack clusters, where IPv6 checks are skipped.
+REQUIRE_DUAL_STACK="${REQUIRE_DUAL_STACK:-false}"
+
 cleanup() {
   kubectl delete namespace "${NS}" --ignore-not-found
 }
@@ -64,8 +69,32 @@ CLUSTER_HAS_IPV6=false
 if [[ "${SERVER_IPV6}" == *:* ]]; then
   CLUSTER_HAS_IPV6=true
   echo "Cluster is dual-stack, server IPv6: ${SERVER_IPV6}"
+elif [ "${REQUIRE_DUAL_STACK}" = "true" ]; then
+  kubectl get pod -n "${NS}" -l app=server -o jsonpath='{.items[0].status.podIPs}'
+  fail "REQUIRE_DUAL_STACK=true but server pod has no IPv6 address — cluster is not dual-stack"
 else
   echo "Cluster is single-stack (IPv4 only) — IPv6 connectivity tests will be skipped"
+fi
+
+# --- 4b. Negative proof: no IPv6 HBONE listener while dual-stack OFF ---
+# The "before" half of the A/B proof; step 7 is the "after" half. Port 15008
+# (HBONE, 0x3AB8) is ztunnel's tunnel listener. With ISTIO_DUAL_STACK=false
+# ztunnel binds it on IPv4 only, so it cannot terminate tunneled traffic over
+# IPv6 — the IPv6 socket simply does not exist yet.
+#
+# Note: we deliberately do NOT assert that an IPv6 *curl* fails here. In ambient
+# mode, with dual-stack off istio-cni does not program ip6tables redirect rules,
+# so IPv6 pod-to-pod traffic bypasses the mesh and connects directly rather than
+# failing. The listener socket, by contrast, is a deterministic property of
+# ztunnel's own config and is the honest signal that IPv6 tunneling is off.
+if [ "${CLUSTER_HAS_IPV6}" = "true" ]; then
+  ZTUNNEL_POD=$(get_ztunnel_pod)
+  IPV6_HBONE_OFF=$(kubectl exec -n "${ISTIO_NAMESPACE}" "${ZTUNNEL_POD}" -- \
+    cat /proc/net/tcp6 2>/dev/null | awk '{print $2}' | grep -i '3AB8$' || true)
+  if [ -n "${IPV6_HBONE_OFF}" ]; then
+    fail "ztunnel has an IPv6 HBONE listener (15008) with ISTIO_DUAL_STACK=false — expected none"
+  fi
+  echo "OK: no IPv6 HBONE listener while dual-stack off (as expected)"
 fi
 
 # --- 5. Enable ISTIO_DUAL_STACK ---

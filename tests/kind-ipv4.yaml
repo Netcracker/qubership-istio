@@ -1,0 +1,8 @@
+# Single-stack IPv4 kind cluster (the kind default, stated explicitly so the
+# integration-test matrix is self-documenting). Istio auto-detects the IPv4
+# stack and configures the Envoy gateway with dns_lookup_family=V4_ONLY without
+# any ISTIO_DUAL_STACK setting.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  ipFamily: ipv4
