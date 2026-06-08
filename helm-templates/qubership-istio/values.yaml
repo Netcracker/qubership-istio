@@ -93,8 +93,6 @@ istiod:
     defaultConfig:
       gatewayTopology:
         numTrustedProxies: 1
-      proxyMetadata:
-        ISTIO_DUAL_STACK: "false"
 
   gatewayClasses:
     istio:
