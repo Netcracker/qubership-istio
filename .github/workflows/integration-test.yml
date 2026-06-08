@@ -84,21 +84,44 @@ jobs:
         run: ct lint --all --chart-dirs ./helm-templates-extracted/qubership-istio
 
       # kind needs IPv6 enabled in the Docker daemon for ipv6/dual clusters.
+      # Merge into the runner's existing daemon.json rather than overwrite it.
       - name: Enable IPv6 in Docker
         if: matrix.ip_family != 'ipv4'
         run: |
           sudo mkdir -p /etc/docker
-          echo '{"ipv6": true, "fixed-cidr-v6": "fd00:dead:beef::/48", "ip6tables": true, "experimental": true}' \
+          existing=$(sudo cat /etc/docker/daemon.json 2>/dev/null || echo '{}')
+          echo "${existing}" \
+            | jq '. + {"ipv6": true, "fixed-cidr-v6": "fd00:dead:beef::/48", "ip6tables": true, "experimental": true}' \
             | sudo tee /etc/docker/daemon.json
           sudo systemctl restart docker
-          # wait for the daemon to come back
           for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
 
-      - name: Create kind cluster (${{ matrix.name }})
+      # Install kind/kubectl only, then create the cluster explicitly so the
+      # ipFamily config is guaranteed to reach kind.
+      - name: Install kind and kubectl
         uses: helm/kind-action@v1
         with:
-          cluster_name: istio-test
-          config: ${{ matrix.kind_config }}
+          install_only: true
+
+      - name: Create kind cluster (${{ matrix.name }})
+        run: kind create cluster --name istio-test --config "${{ matrix.kind_config }}" --wait 120s
+
+      # Fail fast (with the actual clusterIPs) if the cluster did not come up
+      # in the IP family this job expects.
+      - name: Verify cluster IP family (${{ matrix.ip_family }})
+        run: |
+          ips=$(kubectl get svc kubernetes -n default -o jsonpath='{.spec.clusterIPs[*]}')
+          echo "kubernetes service clusterIPs: ${ips}"
+          has4=false; has6=false
+          for ip in ${ips}; do
+            case "${ip}" in *:*) has6=true ;; *) has4=true ;; esac
+          done
+          case "${{ matrix.ip_family }}" in
+            ipv4) [ "${has4}" = true ] && [ "${has6}" = false ] || { echo "expected IPv4-only"; exit 1; } ;;
+            ipv6) [ "${has6}" = true ] && [ "${has4}" = false ] || { echo "expected IPv6-only"; exit 1; } ;;
+            dual) [ "${has4}" = true ] && [ "${has6}" = true ]  || { echo "expected dual-stack"; exit 1; } ;;
+          esac
+          echo "OK: cluster IP family matches '${{ matrix.ip_family }}'"
 
       - name: Install Gateway API CRDs
         run: kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
