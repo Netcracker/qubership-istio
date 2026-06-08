@@ -58,18 +58,6 @@ dump_gw_diag() {
   echo "===== end diagnostics ====="
 }
 
-istiod_dual_stack_val() {
-  kubectl get deployment istiod -n "${ISTIO_NAMESPACE}" \
-    -o jsonpath='{.spec.template.spec.containers[?(@.name=="discovery")].env[?(@.name=="ISTIO_DUAL_STACK")].value}'
-}
-
-gw_dual_stack_val() {
-  local pod="$1"
-  kubectl get pod "${pod}" -n "${ISTIO_NAMESPACE}" \
-    -o jsonpath='{.spec.containers[?(@.name=="istio-proxy")].env}' \
-  | jq -r '.[] | select(.name=="ISTIO_DUAL_STACK") | .value'
-}
-
 apply_gateway() {
   kubectl apply -f - <<EOF
 apiVersion: gateway.networking.k8s.io/v1
@@ -242,12 +230,6 @@ gw_pod_ips() {  # arg: pod name
 }
 
 # =========================== ztunnel helpers ===============================
-ztunnel_dual_stack_val() {
-  kubectl get daemonset ztunnel -n "${ISTIO_NAMESPACE}" \
-    -o jsonpath='{.spec.template.spec.containers[?(@.name=="istio-proxy")].env}' \
-  | jq -r '.[] | select(.name=="ISTIO_DUAL_STACK") | .value'
-}
-
 # Note: ztunnel runs on a distroless/static image (no cat/shell), so we cannot
 # inspect /proc/net/tcp6 inside the pod. ztunnel dual-stack is proven instead by
 # actual IPv6 pod-to-pod connectivity below.
@@ -293,16 +275,7 @@ kubectl rollout status deployment/istiod -n "${ISTIO_NAMESPACE}" --timeout=180s
 kubectl wait --for=condition=Available deployment/istiod -n "${ISTIO_NAMESPACE}" --timeout=180s
 
 # ===========================================================================
-# 1. Defaults: ISTIO_DUAL_STACK=false everywhere
-# ===========================================================================
-DS=$(istiod_dual_stack_val)
-[ "${DS}" = "false" ] || fail "istiod ISTIO_DUAL_STACK: expected 'false' default, got '${DS}'"
-DS=$(ztunnel_dual_stack_val)
-[ "${DS}" = "false" ] || fail "ztunnel ISTIO_DUAL_STACK: expected 'false' default, got '${DS}'"
-echo "OK: ISTIO_DUAL_STACK=false (default) on istiod and ztunnel"
-
-# ===========================================================================
-# 2. Deploy gateway (north-south) + ambient (east-west) workloads
+# 1. Deploy gateway (north-south) + ambient (east-west) workloads
 # ===========================================================================
 # --- gateway side ---
 kubectl create deployment dual-stack-backend \
@@ -319,8 +292,6 @@ apply_httproute
 apply_dns_probe
 
 GW_POD=$(gw_pod)
-GW_DS=$(gw_dual_stack_val "${GW_POD}")
-[ "${GW_DS}" = "false" ] || fail "gateway pod ISTIO_DUAL_STACK: expected 'false', got '${GW_DS}'"
 gw_pod_ips "${GW_POD}"
 echo "Gateway pod IPs: v4='${GW_V4}' v6='${GW_V6}'"
 [ -n "${GW_V6}" ] || fail "gateway pod has no IPv6 address on a dual-stack cluster"
@@ -342,7 +313,7 @@ echo "Ambient server pod IPs: v4='${SERVER_V4}' v6='${SERVER_V6}'"
 [ -n "${SERVER_V6}" ] || fail "ambient server pod has no IPv6 address on a dual-stack cluster"
 
 # ===========================================================================
-# 3. Baseline with flag OFF
+# 2. Baseline with flag OFF
 # ===========================================================================
 # Gateway: dns_lookup_family V4_ONLY, IPv4 works, IPv6 refused.
 DLF=$(gw_dns_lookup_family "${GW_POD}")
@@ -357,7 +328,7 @@ gw_expect_http_fail "${GW_V6}" "gateway IPv6 (flag OFF)"
 ambient_wait "-4" "${SERVER_V4}" "ambient IPv4 (flag OFF)"
 
 # ===========================================================================
-# 4. Enable ISTIO_DUAL_STACK on all data planes at once
+# 3. Enable ISTIO_DUAL_STACK on all data planes at once
 # ===========================================================================
 helm upgrade "${HELM_RELEASE}" "${HELM_CHART_PATH}" \
   --namespace "${ISTIO_NAMESPACE}" \
@@ -370,32 +341,25 @@ helm upgrade "${HELM_RELEASE}" "${HELM_CHART_PATH}" \
 kubectl rollout status deployment/istiod -n "${ISTIO_NAMESPACE}" --timeout=120s
 kubectl rollout status daemonset/ztunnel -n "${ISTIO_NAMESPACE}" --timeout=120s
 
-DS=$(istiod_dual_stack_val)
-[ "${DS}" = "true" ] || fail "istiod ISTIO_DUAL_STACK: expected 'true', got '${DS}'"
-DS=$(ztunnel_dual_stack_val)
-[ "${DS}" = "true" ] || fail "ztunnel ISTIO_DUAL_STACK: expected 'true', got '${DS}'"
-echo "OK: ISTIO_DUAL_STACK=true on istiod and ztunnel"
-
-# Reconcile the gateway Deployment; recreate as a fallback. Generous timeout so
-# the istiod-restart reconcile completes rather than falling into a recreate.
+# Wait for istiod to reconcile the gateway Deployment with the new dual-stack
+# config; recreate as a fallback if the gateway is still operating single-stack.
+# dns_lookup_family is the behavioural signal that the gateway actually went
+# dual (V4_ONLY -> a dual-capable family), so we key the fallback off it.
 kubectl rollout status "deployment/${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" --timeout=240s || true
 GW_POD=$(gw_pod)
-GW_DS=$(gw_dual_stack_val "${GW_POD}")
-if [ "${GW_DS}" != "true" ]; then
-  echo "Gateway Deployment was not auto-reconciled — recreating Gateway..."
+DLF=$(gw_dns_lookup_family "${GW_POD}")
+if ! is_dual_dns_family "${DLF}"; then
+  echo "Gateway still single-stack (dns_lookup_family=${DLF:-<none>}) — recreating Gateway..."
   recreate_gateway
   GW_POD=$(gw_pod)
-  GW_DS=$(gw_dual_stack_val "${GW_POD}")
+  DLF=$(gw_dns_lookup_family "${GW_POD}")
 fi
-[ "${GW_DS}" = "true" ] || fail "gateway pod ISTIO_DUAL_STACK: expected 'true', got '${GW_DS}'"
 gw_pod_ips "${GW_POD}"
-echo "OK: gateway pod ISTIO_DUAL_STACK=true (pod IPs v4='${GW_V4}' v6='${GW_V6}')"
 
 # ===========================================================================
-# 5. Verify IPv6 now works on both data planes (IPv4 still works)
+# 4. Verify IPv6 now works on both data planes (IPv4 still works)
 # ===========================================================================
 # --- gateway ---
-DLF=$(gw_dns_lookup_family "${GW_POD}")
 echo "Gateway Envoy dns_lookup_family (flag ON) = ${DLF:-<not found>}"
 [ -n "${DLF}" ] || fail "DNS probe cluster ${DNS_PROBE_CLUSTER} not found"
 is_dual_dns_family "${DLF}" || fail "expected a dual-capable dns_lookup_family with flag on, got '${DLF}'"
@@ -408,7 +372,7 @@ ambient_wait "-4" "${SERVER_V4}" "ambient IPv4 (flag ON)"
 ambient_wait "-6" "[${SERVER_V6}]" "ambient IPv6 (flag ON)"
 
 # ===========================================================================
-# 6. Restore defaults
+# 5. Restore defaults
 # ===========================================================================
 helm upgrade "${HELM_RELEASE}" "${HELM_CHART_PATH}" \
   --namespace "${ISTIO_NAMESPACE}" \
