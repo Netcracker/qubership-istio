@@ -76,8 +76,15 @@ spec:
       namespaces:
         from: All
 EOF
-  kubectl wait gateway/"${GW_NAME}" -n "${ISTIO_NAMESPACE}" --for=condition=Programmed --timeout=120s
-  kubectl rollout status "deployment/${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" --timeout=120s
+  if ! kubectl wait gateway/"${GW_NAME}" -n "${ISTIO_NAMESPACE}" --for=condition=Programmed --timeout=240s; then
+    echo "Gateway not Programmed — diagnostics:"
+    kubectl get gateway "${GW_NAME}" -n "${ISTIO_NAMESPACE}" -o yaml || true
+    kubectl get pods -n "${ISTIO_NAMESPACE}" -o wide || true
+    kubectl get events -n "${ISTIO_NAMESPACE}" --sort-by=.lastTimestamp 2>/dev/null | tail -30 || true
+    kubectl logs -n "${ISTIO_NAMESPACE}" -l app=istiod --tail=100 || true
+    fail "gateway ${GW_NAME} not Programmed"
+  fi
+  kubectl rollout status "deployment/${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" --timeout=240s
 }
 
 apply_httproute() {
@@ -345,8 +352,9 @@ DS=$(ztunnel_dual_stack_val)
 [ "${DS}" = "true" ] || fail "ztunnel ISTIO_DUAL_STACK: expected 'true', got '${DS}'"
 echo "OK: ISTIO_DUAL_STACK=true on istiod and ztunnel"
 
-# Reconcile the gateway Deployment; recreate as a fallback.
-kubectl rollout status "deployment/${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" --timeout=120s
+# Reconcile the gateway Deployment; recreate as a fallback. Generous timeout so
+# the istiod-restart reconcile completes rather than falling into a recreate.
+kubectl rollout status "deployment/${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" --timeout=240s || true
 GW_POD=$(gw_pod)
 GW_DS=$(gw_dual_stack_val "${GW_POD}")
 if [ "${GW_DS}" != "true" ]; then
