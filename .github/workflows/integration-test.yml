@@ -14,14 +14,14 @@ jobs:
         include:
           # Single-stack IPv4: gateway dns_lookup_family must be V4_ONLY, IPv4
           # works, no IPv6 path. Istio auto-detects the stack (no flag needed).
-          - name: ipv4-dns-lookup-family
+          - name: ipv4-stack
             ip_family: ipv4
             kind_config: tests/kind-ipv4.yaml
             tests: gateway-ip-family
             require_dual_stack: "false"
           # Single-stack IPv6: gateway dns_lookup_family must be V6_ONLY, IPv6
           # works. Istio auto-detects the stack (no flag needed).
-          - name: ipv6-dns-lookup-family
+          - name: ipv6-stack
             ip_family: ipv6
             kind_config: tests/kind-ipv6.yaml
             tests: gateway-ip-family
