@@ -127,6 +127,9 @@ ztunnel:
   # If Image contains a "/", it will replace the entire `image` in the pod.
   # image: ztunnel
 
+  env:
+    ISTIO_DUAL_STACK: "false"
+
   meshConfig:
     defaultConfig:
       proxyMetadata:
