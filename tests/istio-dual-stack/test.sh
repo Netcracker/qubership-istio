@@ -196,9 +196,14 @@ gw_expect_http_fail() {  # ip label
   echo "OK: ${label} is unreachable (as expected)"
 }
 
-gw_svc_ips() {  # sets GW_V4 / GW_V6 globals
-  local ips
-  ips=$(kubectl get svc "${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" -o jsonpath='{.spec.clusterIPs[*]}')
+# Sets GW_V4 / GW_V6 from the gateway POD IPs. We target the pod directly rather
+# than the gateway Service because Istio's auto-created Service is SingleStack
+# (no IPv6 clusterIP on a dual-stack cluster), whereas pods get dual IPs. Hitting
+# podIP:80 exercises the Envoy listener's IP family directly, which is exactly
+# what ISTIO_DUAL_STACK changes.
+gw_pod_ips() {  # arg: pod name
+  local pod="$1" ips
+  ips=$(kubectl get pod "${pod}" -n "${ISTIO_NAMESPACE}" -o jsonpath='{.status.podIPs[*].ip}')
   GW_V4=""
   GW_V6=""
   for ip in ${ips}; do
@@ -243,21 +248,23 @@ ambient_wait() {
 
 # ===========================================================================
 # Guard: this test is meaningful only on a dual-stack cluster.
+# Detect via node podCIDRs — the kubernetes Service is SingleStack and would
+# show only one family even on a dual-stack cluster.
 # ===========================================================================
-K8S_IPS=$(kubectl get svc kubernetes -n default -o jsonpath='{.spec.clusterIPs[*]}')
+NODE_CIDRS=$(kubectl get nodes -o jsonpath='{range .items[*]}{.spec.podCIDRs[*]}{" "}{end}')
 HAS_V4=false
 HAS_V6=false
-for ip in ${K8S_IPS}; do
-  case "${ip}" in *:*) HAS_V6=true ;; *) HAS_V4=true ;; esac
+for c in ${NODE_CIDRS}; do
+  case "${c}" in *:*) HAS_V6=true ;; *) HAS_V4=true ;; esac
 done
 if [ "${HAS_V4}" != "true" ] || [ "${HAS_V6}" != "true" ]; then
   if [ "${REQUIRE_DUAL_STACK}" = "true" ]; then
-    fail "REQUIRE_DUAL_STACK=true but cluster is not dual-stack (kubernetes svc IPs: ${K8S_IPS})"
+    fail "REQUIRE_DUAL_STACK=true but cluster is not dual-stack (node podCIDRs: ${NODE_CIDRS})"
   fi
-  echo "Cluster is not dual-stack (kubernetes svc IPs: ${K8S_IPS}) — skipping istio-dual-stack test"
+  echo "Cluster is not dual-stack (node podCIDRs: ${NODE_CIDRS}) — skipping istio-dual-stack test"
   exit 0
 fi
-echo "OK: dual-stack cluster (kubernetes svc IPs: ${K8S_IPS})"
+echo "OK: dual-stack cluster (node podCIDRs: ${NODE_CIDRS})"
 
 # ===========================================================================
 # 1. Defaults: ISTIO_DUAL_STACK=false everywhere
@@ -288,8 +295,9 @@ apply_dns_probe
 GW_POD=$(gw_pod)
 GW_DS=$(gw_dual_stack_val "${GW_POD}")
 [ "${GW_DS}" = "false" ] || fail "gateway pod ISTIO_DUAL_STACK: expected 'false', got '${GW_DS}'"
-gw_svc_ips
-echo "Gateway service IPs: v4='${GW_V4}' v6='${GW_V6}'"
+gw_pod_ips "${GW_POD}"
+echo "Gateway pod IPs: v4='${GW_V4}' v6='${GW_V6}'"
+[ -n "${GW_V6}" ] || fail "gateway pod has no IPv6 address on a dual-stack cluster"
 
 # --- ambient side ---
 kubectl create namespace "${AMBIENT_NS}"
@@ -356,8 +364,8 @@ if [ "${GW_DS}" != "true" ]; then
   GW_DS=$(gw_dual_stack_val "${GW_POD}")
 fi
 [ "${GW_DS}" = "true" ] || fail "gateway pod ISTIO_DUAL_STACK: expected 'true', got '${GW_DS}'"
-gw_svc_ips
-echo "OK: gateway pod ISTIO_DUAL_STACK=true"
+gw_pod_ips "${GW_POD}"
+echo "OK: gateway pod ISTIO_DUAL_STACK=true (pod IPs v4='${GW_V4}' v6='${GW_V6}')"
 
 # ===========================================================================
 # 5. Verify IPv6 now works on both data planes (IPv4 still works)

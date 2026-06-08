@@ -127,11 +127,14 @@ jobs:
       # in the IP family this job expects.
       - name: Verify cluster IP family (${{ matrix.ip_family }})
         run: |
-          ips=$(kubectl get svc kubernetes -n default -o jsonpath='{.spec.clusterIPs[*]}')
-          echo "kubernetes service clusterIPs: ${ips}"
+          # Use node podCIDRs, not the kubernetes Service: that Service is
+          # created SingleStack, so it only ever shows one family even on a
+          # dual-stack cluster. podCIDRs reflect the actual cluster stack.
+          cidrs=$(kubectl get nodes -o jsonpath='{range .items[*]}{.spec.podCIDRs[*]}{" "}{end}')
+          echo "node podCIDRs: ${cidrs}"
           has4=false; has6=false
-          for ip in ${ips}; do
-            case "${ip}" in *:*) has6=true ;; *) has4=true ;; esac
+          for c in ${cidrs}; do
+            case "${c}" in *:*) has6=true ;; *) has4=true ;; esac
           done
           case "${{ matrix.ip_family }}" in
             ipv4) [ "${has4}" = true ] && [ "${has6}" = false ] || { echo "expected IPv4-only"; exit 1; } ;;
