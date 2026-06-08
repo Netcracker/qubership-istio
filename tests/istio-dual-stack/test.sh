@@ -47,6 +47,17 @@ gw_pod() {
     -o jsonpath='{.items[0].metadata.name}'
 }
 
+dump_gw_diag() {
+  echo "===== gateway diagnostics ====="
+  kubectl get gateway "${GW_NAME}" -n "${ISTIO_NAMESPACE}" -o yaml || true
+  kubectl get deploy,po,svc,endpointslice -n "${ISTIO_NAMESPACE}" \
+    -l "gateway.networking.k8s.io/gateway-name=${GW_NAME}" -o wide || true
+  kubectl describe pod -n "${ISTIO_NAMESPACE}" \
+    -l "gateway.networking.k8s.io/gateway-name=${GW_NAME}" || true
+  kubectl get events -n "${ISTIO_NAMESPACE}" --sort-by=.lastTimestamp 2>/dev/null | tail -30 || true
+  echo "===== end diagnostics ====="
+}
+
 istiod_dual_stack_val() {
   kubectl get deployment istiod -n "${ISTIO_NAMESPACE}" \
     -o jsonpath='{.spec.template.spec.containers[?(@.name=="discovery")].env[?(@.name=="ISTIO_DUAL_STACK")].value}'
@@ -76,15 +87,22 @@ spec:
       namespaces:
         from: All
 EOF
-  if ! kubectl wait gateway/"${GW_NAME}" -n "${ISTIO_NAMESPACE}" --for=condition=Programmed --timeout=240s; then
-    echo "Gateway not Programmed — diagnostics:"
-    kubectl get gateway "${GW_NAME}" -n "${ISTIO_NAMESPACE}" -o yaml || true
-    kubectl get pods -n "${ISTIO_NAMESPACE}" -o wide || true
-    kubectl get events -n "${ISTIO_NAMESPACE}" --sort-by=.lastTimestamp 2>/dev/null | tail -30 || true
-    kubectl logs -n "${ISTIO_NAMESPACE}" -l app=istiod --tail=100 || true
+  # Wait for istiod to create the managed Deployment.
+  for i in $(seq 1 24); do
+    kubectl get deploy "${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" >/dev/null 2>&1 && break
+    echo "Waiting for gateway Deployment to appear (attempt ${i}/24)..."
+    sleep 5
+  done
+  # Pods Ready first (this is what makes the Service get endpoints and lets the
+  # gateway's address be assigned → Programmed).
+  if ! kubectl rollout status "deployment/${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" --timeout=240s; then
+    dump_gw_diag
+    fail "gateway ${GW_NAME} Deployment did not become Ready"
+  fi
+  if ! kubectl wait gateway/"${GW_NAME}" -n "${ISTIO_NAMESPACE}" --for=condition=Programmed --timeout=120s; then
+    dump_gw_diag
     fail "gateway ${GW_NAME} not Programmed"
   fi
-  kubectl rollout status "deployment/${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" --timeout=240s
 }
 
 apply_httproute() {
@@ -267,6 +285,12 @@ if [ "${HAS_V4}" != "true" ] || [ "${HAS_V6}" != "true" ]; then
   exit 0
 fi
 echo "OK: dual-stack cluster (node podCIDRs: ${NODE_CIDRS})"
+
+# Ensure istiod is fully up before creating Gateways — creating a Gateway while
+# istiod's controllers are still starting can leave the managed Deployment in a
+# half-reconciled state (AddressNotAssigned / no endpoints).
+kubectl rollout status deployment/istiod -n "${ISTIO_NAMESPACE}" --timeout=180s
+kubectl wait --for=condition=Available deployment/istiod -n "${ISTIO_NAMESPACE}" --timeout=180s
 
 # ===========================================================================
 # 1. Defaults: ISTIO_DUAL_STACK=false everywhere
