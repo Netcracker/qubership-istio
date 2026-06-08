@@ -334,7 +334,10 @@ helm upgrade "${HELM_RELEASE}" "${HELM_CHART_PATH}" \
   --namespace "${ISTIO_NAMESPACE}" \
   --timeout 3m \
   --wait \
-  --reuse-values
+  --reuse-values \
+  --set 'istiod.env.ISTIO_DUAL_STACK=true' \
+  --set-string 'istiod.meshConfig.defaultConfig.proxyMetadata.ISTIO_DUAL_STACK=true' \
+  --set 'ztunnel.env.ISTIO_DUAL_STACK=true'
 kubectl rollout status deployment/istiod -n "${ISTIO_NAMESPACE}" --timeout=120s
 kubectl rollout status daemonset/ztunnel -n "${ISTIO_NAMESPACE}" --timeout=120s
 
