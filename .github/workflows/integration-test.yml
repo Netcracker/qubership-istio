@@ -8,26 +8,40 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Each job runs an explicit list of tests on a cluster of the matching
+        # IP family — no wildcard, and dual-stack tests are never mixed with the
+        # general functional tests.
         include:
-          # Single-stack IPv4: Envoy gateway dns_lookup_family must be V4_ONLY,
-          # IPv4 works, no IPv6 path. Istio auto-detects the stack (no flag).
-          - ip_family: ipv4
+          # Single-stack IPv4: gateway dns_lookup_family must be V4_ONLY, IPv4
+          # works, no IPv6 path. Istio auto-detects the stack (no flag needed).
+          - name: ipv4-dns-lookup-family
+            ip_family: ipv4
             kind_config: tests/kind-ipv4.yaml
-            test_filter: gateway-ip-family
+            tests: gateway-ip-family
             require_dual_stack: "false"
-          # Single-stack IPv6: dns_lookup_family must be V6_ONLY, IPv6 works.
-          # Istio auto-detects the stack (no flag).
-          - ip_family: ipv6
+          # Single-stack IPv6: gateway dns_lookup_family must be V6_ONLY, IPv6
+          # works. Istio auto-detects the stack (no flag needed).
+          - name: ipv6-dns-lookup-family
+            ip_family: ipv6
             kind_config: tests/kind-ipv6.yaml
-            test_filter: gateway-ip-family
+            tests: gateway-ip-family
             require_dual_stack: "false"
-          # Dual-stack: ISTIO_DUAL_STACK gates the behaviour. Runs the full
-          # suite (gateway-ip-family dual branch + ztunnel-dual-stack + others).
-          - ip_family: dual
+          # Dual-stack: ISTIO_DUAL_STACK gates both the gateway (Envoy
+          # dns_lookup_family + north-south IPv6) and ambient (ztunnel
+          # east-west IPv6) data planes — all covered by istio-dual-stack.
+          - name: dual-stack
+            ip_family: dual
             kind_config: tests/kind-dual-stack.yaml
-            test_filter: "*"
+            tests: istio-dual-stack
             require_dual_stack: "true"
-    name: integration-test (${{ matrix.ip_family }})
+          # General functional tests (not IP-family specific), on a plain
+          # single-stack IPv4 cluster — kept separate from the dual-stack tests.
+          - name: functional
+            ip_family: ipv4
+            kind_config: tests/kind-ipv4.yaml
+            tests: gateway num-trusted-proxies rollout
+            require_dual_stack: "false"
+    name: integration-test (${{ matrix.name }})
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -80,7 +94,7 @@ jobs:
           # wait for the daemon to come back
           for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
 
-      - name: Create kind cluster (${{ matrix.ip_family }})
+      - name: Create kind cluster (${{ matrix.name }})
         uses: helm/kind-action@v1
         with:
           cluster_name: istio-test
@@ -99,13 +113,18 @@ jobs:
             --force-conflicts \
             --set MONITORING_ENABLED=false
 
-      # On the dual-stack cluster REQUIRE_DUAL_STACK=true turns skipped IPv6
-      # checks into hard failures. The test_filter scopes which tests run per
-      # stack (single-stack runs only the stack-aware gateway test).
-      - name: Run integration tests (${{ matrix.ip_family }})
+      # Run each named test explicitly (one test-suite invocation per test) so
+      # no job depends on a wildcard. On the dual-stack cluster
+      # REQUIRE_DUAL_STACK=true turns skipped IPv6 checks into hard failures.
+      - name: Run integration tests (${{ matrix.name }})
         env:
           REQUIRE_DUAL_STACK: ${{ matrix.require_dual_stack }}
-        run: bash tests/test-suite.sh ./helm-templates-extracted/qubership-istio '${{ matrix.test_filter }}'
+        run: |
+          for t in ${{ matrix.tests }}; do
+            echo "::group::test: ${t}"
+            bash tests/test-suite.sh ./helm-templates-extracted/qubership-istio "${t}"
+            echo "::endgroup::"
+          done
 
       - name: Dump state on failure
         if: failure()
@@ -122,6 +141,6 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: istio-debug-${{ matrix.ip_family }}-${{ github.run_id }}
+          name: istio-debug-${{ matrix.name }}-${{ github.run_id }}
           path: /tmp/istio-debug/
           retention-days: 7
