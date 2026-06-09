@@ -38,6 +38,8 @@ run_test() {
 # optional: glob pattern to filter test folders (default: all)
 TEST_FILTER=${2:-*}
 find "$SUITE_DIR" -maxdepth 1 -mindepth 1 -name "$TEST_FILTER" -type d -printf "%f\n" | sort | while read -r test_name; do
+  # Skip directories that are not tests (e.g. lib/ shared helpers).
+  [ -f "$SUITE_DIR/$test_name/test.sh" ] || continue
   run_test "$test_name"
 done
 

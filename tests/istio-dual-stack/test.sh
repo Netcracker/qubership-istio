@@ -4,49 +4,42 @@ set -eux
 # ---------------------------------------------------------------------------
 # Istio dual-stack test (dual-stack cluster only).
 #
-# Proves that the ISTIO_DUAL_STACK feature flag turns on IPv6 across BOTH Istio
+# Checks that the ISTIO_DUAL_STACK feature flag turns on IPv6 across BOTH Istio
 # data planes on a dual-stack cluster:
 #
 #   * Gateway (Envoy, north-south): dns_lookup_family flips V4_ONLY -> a
 #     dual-capable family (e.g. V4_PREFERRED), IPv6 traffic through the gateway
 #     goes from refused to working, and IPv4 keeps working.
 #   * ztunnel (ambient, east-west): IPv6 pod-to-pod traffic through the mesh
-#     starts working, and IPv4 keeps working. (ztunnel is a distroless/static
-#     image with no shell, so we verify behaviour by connectivity rather than by
-#     inspecting listener sockets inside the pod.)
-#
-# Everything is toggled with a single helm upgrade that sets all three knobs
-# together (istiod env + proxyMetadata + ztunnel env), so istiod restarts once
-# and both data planes reconcile.
-#
-# REQUIRE_DUAL_STACK=true (set by CI on the dual-stack cluster) makes a missing
-# IPv6 path a hard failure instead of a skip.
+#     starts working, and IPv4 keeps working. 
 # ---------------------------------------------------------------------------
 
 REQUIRE_DUAL_STACK="${REQUIRE_DUAL_STACK:-false}"
 
 GW_NAME=dual-stack-gw
+BACKEND_NAME=dual-stack-backend
+DNS_PROBE_NAME=dual-stack-dns-probe
 AMBIENT_NS=dual-stack-ambient
 DNS_PROBE_HOST=dns-probe.dual-stack.test
 DNS_PROBE_CLUSTER="outbound|80||${DNS_PROBE_HOST}"
+CLIENT_POD=dual-stack-client
+
+# Shared gateway helpers (gw_pod, apply_httproute, apply_dns_probe,
+# gw_dns_lookup_family, gw_http_ok, gw_wait_http_ok).
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib/gateway.sh"
 
 cleanup() {
-  kubectl delete httproute dual-stack-backend -n default --ignore-not-found
+  kubectl delete httproute "${BACKEND_NAME}" -n default --ignore-not-found
   kubectl delete gateway "${GW_NAME}" -n "${ISTIO_NAMESPACE}" --ignore-not-found
-  kubectl delete service dual-stack-backend -n default --ignore-not-found
-  kubectl delete deployment dual-stack-backend -n default --ignore-not-found
-  kubectl delete pod dual-stack-client -n default --ignore-not-found
-  kubectl delete serviceentry dual-stack-dns-probe -n default --ignore-not-found
+  kubectl delete service "${BACKEND_NAME}" -n default --ignore-not-found
+  kubectl delete deployment "${BACKEND_NAME}" -n default --ignore-not-found
+  kubectl delete pod "${CLIENT_POD}" -n default --ignore-not-found
+  kubectl delete serviceentry "${DNS_PROBE_NAME}" -n default --ignore-not-found
   kubectl delete namespace "${AMBIENT_NS}" --ignore-not-found
 }
 trap cleanup EXIT
 
 # =========================== gateway helpers ===============================
-gw_pod() {
-  kubectl get pod -n "${ISTIO_NAMESPACE}" -l "gateway.networking.k8s.io/gateway-name=${GW_NAME}" \
-    -o jsonpath='{.items[0].metadata.name}'
-}
-
 dump_gw_diag() {
   echo "===== gateway diagnostics ====="
   kubectl get gateway "${GW_NAME}" -n "${ISTIO_NAMESPACE}" -o yaml || true
@@ -93,36 +86,6 @@ EOF
   fi
 }
 
-apply_httproute() {
-  kubectl apply -f - <<EOF
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: dual-stack-backend
-  namespace: default
-spec:
-  parentRefs:
-  - name: ${GW_NAME}
-    namespace: ${ISTIO_NAMESPACE}
-  rules:
-  - backendRefs:
-    - name: dual-stack-backend
-      port: 80
-EOF
-  local status=""
-  for i in $(seq 1 24); do
-    status=$(kubectl get httproute dual-stack-backend -n default \
-      -o jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}' 2>/dev/null)
-    [ "${status}" = "True" ] && break
-    echo "Waiting for HTTPRoute to be accepted (attempt ${i}/24)..."
-    sleep 5
-  done
-  if [ "${status}" != "True" ]; then
-    kubectl get httproute dual-stack-backend -n default -o yaml
-    fail "HTTPRoute not accepted"
-  fi
-}
-
 recreate_gateway() {
   kubectl delete gateway "${GW_NAME}" -n "${ISTIO_NAMESPACE}" --ignore-not-found
   for i in $(seq 1 12); do
@@ -134,69 +97,11 @@ recreate_gateway() {
   apply_httproute
 }
 
-apply_dns_probe() {
-  kubectl apply -f - <<EOF
-apiVersion: networking.istio.io/v1beta1
-kind: ServiceEntry
-metadata:
-  name: dual-stack-dns-probe
-  namespace: default
-spec:
-  hosts:
-  - ${DNS_PROBE_HOST}
-  location: MESH_EXTERNAL
-  ports:
-  - number: 80
-    name: http
-    protocol: HTTP
-  resolution: DNS
-EOF
-}
-
-# Envoy omits dns_lookup_family from config_dump when it is the proto default
-# (V4_ONLY), so an absent value is normalized to V4_ONLY.
-gw_dns_lookup_family() {
-  local pod="$1" val=""
-  for _ in $(seq 1 12); do
-    val=$(kubectl exec -n "${ISTIO_NAMESPACE}" "${pod}" -c istio-proxy -- \
-      pilot-agent request GET config_dump 2>/dev/null \
-      | jq -r --arg c "${DNS_PROBE_CLUSTER}" '
-          [ .configs[]
-            | select(.["@type"] | test("ClustersConfigDump"))
-            | ((.dynamic_active_clusters // []) + (.static_clusters // []))[]
-            | select(.cluster.name == $c)
-            | (.cluster.dns_lookup_family // "V4_ONLY") ] | .[0] // empty' 2>/dev/null)
-    [ -n "${val}" ] && { echo "${val}"; return 0; }
-    sleep 5
-  done
-  echo ""
-}
-
 is_dual_dns_family() {
   case "$1" in
     V4_PREFERRED|V6_PREFERRED|ALL|AUTO) return 0 ;;
     *) return 1 ;;
   esac
-}
-
-# HTTP GET to the gateway clusterIP from the in-cluster client pod.
-gw_http_ok() {
-  local ip="$1" url
-  case "${ip}" in
-    *:*) url="http://[${ip}]:80/get" ;;
-    *)   url="http://${ip}:80/get" ;;
-  esac
-  kubectl exec -n default dual-stack-client -- curl -sf --max-time 10 "${url}" >/dev/null
-}
-
-gw_wait_http_ok() {  # ip label
-  local ip="$1" label="$2"
-  for i in $(seq 1 12); do
-    gw_http_ok "${ip}" && { echo "OK: ${label} works"; return 0; }
-    echo "Attempt ${i}: waiting for ${label}..."
-    sleep 5
-  done
-  fail "${label} failed"
 }
 
 gw_expect_http_fail() {  # ip label
@@ -229,25 +134,6 @@ gw_pod_ips() {  # arg: pod name
   done
 }
 
-# =========================== ztunnel helpers ===============================
-# Note: ztunnel runs on a distroless/static image (no cat/shell), so we cannot
-# inspect /proc/net/tcp6 inside the pod. ztunnel dual-stack is proven instead by
-# actual IPv6 pod-to-pod connectivity below.
-
-# curl from the ambient client to host:8080, retried. $1=curl family flag (-4/-6),
-# $2=host (bracketed for IPv6), $3=label.
-ambient_wait() {
-  local flag="$1" host="$2" label="$3"
-  for i in $(seq 1 12); do
-    kubectl exec -n "${AMBIENT_NS}" client -- \
-      curl -sf --max-time 10 "${flag}" "http://${host}:8080/get" >/dev/null 2>&1 \
-      && { echo "OK: ${label} works"; return 0; }
-    echo "Attempt ${i}: waiting for ${label}..."
-    sleep 5
-  done
-  fail "${label} failed"
-}
-
 # ===========================================================================
 # Guard: this test is meaningful only on a dual-stack cluster.
 # Detect via node podCIDRs — the kubernetes Service is SingleStack and would
@@ -278,14 +164,14 @@ kubectl wait --for=condition=Available deployment/istiod -n "${ISTIO_NAMESPACE}"
 # 1. Deploy gateway (north-south) + ambient (east-west) workloads
 # ===========================================================================
 # --- gateway side ---
-kubectl create deployment dual-stack-backend \
+kubectl create deployment "${BACKEND_NAME}" \
   --image=mccutchen/go-httpbin:v2.15.0 --port=8080 -n default
-kubectl expose deployment dual-stack-backend --port=80 --target-port=8080 -n default
-kubectl rollout status deployment/dual-stack-backend -n default --timeout=120s
+kubectl expose deployment "${BACKEND_NAME}" --port=80 --target-port=8080 -n default
+kubectl rollout status "deployment/${BACKEND_NAME}" -n default --timeout=120s
 
-kubectl run dual-stack-client \
+kubectl run "${CLIENT_POD}" \
   --image=curlimages/curl:8.5.0 --restart=Never -n default -- sleep 600
-kubectl wait pod/dual-stack-client -n default --for=condition=Ready --timeout=60s
+kubectl wait "pod/${CLIENT_POD}" -n default --for=condition=Ready --timeout=60s
 
 apply_gateway
 apply_httproute
@@ -297,15 +183,7 @@ echo "Gateway pod IPs: v4='${GW_V4}' v6='${GW_V6}'"
 [ -n "${GW_V6}" ] || fail "gateway pod has no IPv6 address on a dual-stack cluster"
 
 # --- ambient side ---
-kubectl create namespace "${AMBIENT_NS}"
-kubectl label namespace "${AMBIENT_NS}" istio.io/dataplane-mode=ambient
-kubectl create deployment server \
-  --image=mccutchen/go-httpbin:v2.15.0 --port=8080 -n "${AMBIENT_NS}"
-kubectl expose deployment server --port=80 --target-port=8080 -n "${AMBIENT_NS}"
-kubectl run client \
-  --image=curlimages/curl:8.5.0 --restart=Never -n "${AMBIENT_NS}" -- sleep 600
-kubectl rollout status deployment/server -n "${AMBIENT_NS}" --timeout=120s
-kubectl wait pod/client -n "${AMBIENT_NS}" --for=condition=Ready --timeout=60s
+apply_ambient_workloads
 
 SERVER_V4=$(kubectl get pod -n "${AMBIENT_NS}" -l app=server -o jsonpath='{.items[0].status.podIP}')
 SERVER_V6=$(kubectl get pod -n "${AMBIENT_NS}" -l app=server -o jsonpath='{.items[0].status.podIPs[1].ip}')
