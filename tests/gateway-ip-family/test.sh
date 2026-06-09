@@ -19,6 +19,15 @@ set -eux
 #
 # dns_lookup_family is read from the gateway Envoy via a DNS-resolved
 # ServiceEntry probe.
+#
+# Scenario:
+#   1. Deploy a gateway (north-south) and an ambient namespace with a
+#      server + client (east-west).
+#   2. Detect the cluster stack from the gateway Service clusterIPs; if it is
+#      dual-stack, skip — that case is the istio-dual-stack test's job.
+#   3. Gateway: assert Envoy dns_lookup_family matches the cluster family
+#      (ipv4 -> V4_ONLY, ipv6 -> V6_ONLY) and a request through it succeeds.
+#   4. ztunnel: assert pod-to-pod traffic works over the cluster's single family.
 # ---------------------------------------------------------------------------
 
 GW_NAME=ip-family-gw

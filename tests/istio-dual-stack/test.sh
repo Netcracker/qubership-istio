@@ -11,7 +11,18 @@ set -eux
 #     dual-capable family (e.g. V4_PREFERRED), IPv6 traffic through the gateway
 #     goes from refused to working, and IPv4 keeps working.
 #   * ztunnel (ambient, east-west): IPv6 pod-to-pod traffic through the mesh
-#     starts working, and IPv4 keeps working. 
+#     starts working, and IPv4 keeps working.
+#
+# Scenario:
+#   1. Skip unless the cluster is dual-stack (REQUIRE_DUAL_STACK=true, set by CI
+#      on the dual-stack cluster, turns a missing IPv6 path into a hard failure).
+#   2. Deploy a gateway (north-south) and an ambient namespace with a
+#      server + client (east-west).
+#   3. Baseline, flag OFF: gateway dns_lookup_family=V4_ONLY (IPv4 works, IPv6
+#      refused); ztunnel IPv4 east-west works.
+#   4. Enable ISTIO_DUAL_STACK on istiod + proxies + ztunnel via one helm upgrade.
+#   5. Verify IPv6 now works on both data planes and IPv4 still works.
+#   6. Restore ISTIO_DUAL_STACK to false.
 # ---------------------------------------------------------------------------
 
 REQUIRE_DUAL_STACK="${REQUIRE_DUAL_STACK:-false}"
