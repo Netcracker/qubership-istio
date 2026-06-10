@@ -108,9 +108,9 @@ recreate_gateway() {
   apply_httproute
 }
 
-is_dual_dns_family() {
+is_dual_capable_dns_family() {
   case "$1" in
-    V4_PREFERRED|V6_PREFERRED|ALL|AUTO) return 0 ;;
+    ALL) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -237,7 +237,7 @@ kubectl rollout status daemonset/ztunnel -n "${ISTIO_NAMESPACE}" --timeout=120s
 kubectl rollout status "deployment/${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" --timeout=240s || true
 GW_POD=$(gw_pod)
 DLF=$(gw_dns_lookup_family "${GW_POD}")
-if ! is_dual_dns_family "${DLF}"; then
+if ! is_dual_capable_dns_family "${DLF}"; then
   echo "Gateway still single-stack (dns_lookup_family=${DLF:-<none>}) — recreating Gateway..."
   recreate_gateway
   GW_POD=$(gw_pod)
@@ -251,7 +251,7 @@ gw_pod_ips "${GW_POD}"
 # --- gateway ---
 echo "Gateway Envoy dns_lookup_family (flag ON) = ${DLF:-<not found>}"
 [ -n "${DLF}" ] || fail "DNS probe cluster ${DNS_PROBE_CLUSTER} not found"
-is_dual_dns_family "${DLF}" || fail "expected a dual-capable dns_lookup_family with flag on, got '${DLF}'"
+is_dual_capable_dns_family "${DLF}" || fail "expected a dual-capable dns_lookup_family with flag on, got '${DLF}'"
 echo "OK: gateway dns_lookup_family=${DLF} (dual-capable, was V4_ONLY when off)"
 gw_wait_http_ok "${GW_V4}" "gateway IPv4 (flag ON)"
 gw_wait_http_ok "${GW_V6}" "gateway IPv6 (flag ON)"
