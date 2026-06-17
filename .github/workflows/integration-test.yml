@@ -46,6 +46,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
+      # The chart's Istio subcharts (base, cni, istiod, ztunnel) are not
+      # committed; they are vendored into charts/ by the helm-charts-build job
+      # and shipped in this artifact. The transfer image is built from the repo
+      # checkout, so the artifact must be restored into the build context here —
+      # otherwise the image carries a chart with no charts/ and the install
+      # fails with "missing in charts/ directory".
+      - name: Download helm-templates artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: helm-templates
+          path: ./helm-templates/qubership-istio
+
       - name: Build transfer image locally (linux/amd64)
         run: |
           docker build \
