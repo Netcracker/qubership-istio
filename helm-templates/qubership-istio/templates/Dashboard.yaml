@@ -1,6 +1,7 @@
 {{- if .Values.MONITORING_ENABLED }}
 ---
-apiVersion: grafana.integreatly.org/v1beta1
+# apiVersion: grafana.integreatly.org/v1beta1 # Uncomment during migration to future monitoring versions
+apiVersion: integreatly.org/v1alpha1
 kind: GrafanaDashboard
 metadata:
   name: istio-control-plane-dashboard
@@ -10,14 +11,15 @@ metadata:
     app.kubernetes.io/managed-by: 'saasDeployer'
     app.kubernetes.io/processed-by-operator: 'grafana-operator'
 spec:
-  allowCrossNamespaceImport: true
-  instanceSelector:
-    matchLabels:
-      app.kubernetes.io/component: grafana
-      app.kubernetes.io/part-of: monitoring
+#  allowCrossNamespaceImport: true # Uncomment during migration to future monitoring versions
+#  instanceSelector: # Uncomment during migration to future monitoring versions
+#    matchLabels:
+#      app.kubernetes.io/component: grafana
+#      app.kubernetes.io/part-of: monitoring
   json: {{ .Files.Get  "dashboards/istio-control-plane-dashboard.json" | toJson }}
 ---
-apiVersion: grafana.integreatly.org/v1beta1
+# apiVersion: grafana.integreatly.org/v1beta1 # Uncomment during migration to future monitoring versions
+apiVersion: integreatly.org/v1alpha1
 kind: GrafanaDashboard
 metadata:
   name: istio-ztunnel-dashboard
@@ -27,10 +29,10 @@ metadata:
     app.kubernetes.io/managed-by: 'saasDeployer'
     app.kubernetes.io/processed-by-operator: 'grafana-operator'
 spec:
-  allowCrossNamespaceImport: true
-  instanceSelector:
-    matchLabels:
-      app.kubernetes.io/component: grafana
-      app.kubernetes.io/part-of: monitoring
+#  allowCrossNamespaceImport: true # Uncomment during migration to future monitoring versions
+#  instanceSelector: # Uncomment during migration to future monitoring versions
+#    matchLabels:
+#      app.kubernetes.io/component: grafana
+#      app.kubernetes.io/part-of: monitoring
   json: {{ .Files.Get  "dashboards/istio-ztunnel-dashboard.json" | toJson }}
 {{- end }}
