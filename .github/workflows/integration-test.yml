@@ -46,12 +46,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Download helm-templates artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: helm-templates
-          path: ./helm-templates/qubership-istio
-
       - name: Build transfer image locally (linux/amd64)
         run: |
           docker build \

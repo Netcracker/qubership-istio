@@ -7,9 +7,9 @@ set -eux
 # Checks that the ISTIO_DUAL_STACK feature flag turns on IPv6 across BOTH Istio
 # data planes on a dual-stack cluster:
 #
-#   * Gateway (Envoy, north-south): dns_lookup_family flips V4_ONLY -> a
-#     dual-capable family (e.g. V4_PREFERRED), IPv6 traffic through the gateway
-#     goes from refused to working, and IPv4 keeps working.
+#   * Gateway (Envoy, north-south): dns_lookup_family flips V4_ONLY -> ALL,
+#     IPv6 traffic through the gateway goes from refused to working, and IPv4
+#     keeps working.
 #   * ztunnel (ambient, east-west): IPv6 pod-to-pod traffic through the mesh
 #     starts working, and IPv4 keeps working.
 #
