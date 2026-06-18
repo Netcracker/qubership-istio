@@ -75,8 +75,8 @@ istiod:
   # ISTIO_DUAL_STACK requires two coordinated settings:
   #
   # 1. meshConfig.defaultConfig.proxyMetadata.ISTIO_DUAL_STACK
-  #    Carries the value into gateway pods via ProxyConfig.ProxyMetadata
-  #    (kube-gateway.yaml iterates this map and emits one env var per entry).
+  #    istiod copies each proxyMetadata entry into the generated gateway pod as
+  #    an environment variable, so this carries the flag into the gateway proxy.
   #
   # 2. env.ISTIO_DUAL_STACK (istiod Deployment env var)
   #    Changing this mutates the istiod pod template, which restarts istiod.
@@ -126,9 +126,6 @@ ztunnel:
   # Image name to pull from. Image will be `Hub/Image:Tag-Variant`
   # If Image contains a "/", it will replace the entire `image` in the pod.
   # image: ztunnel
-
-  env:
-    ISTIO_DUAL_STACK: "false"
 
   meshConfig:
     defaultConfig:

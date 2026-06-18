@@ -20,7 +20,8 @@ set -eux
 #      server + client (east-west).
 #   3. Baseline, flag OFF: gateway dns_lookup_family=V4_ONLY (IPv4 works, IPv6
 #      refused); ztunnel IPv4 east-west works.
-#   4. Enable ISTIO_DUAL_STACK on istiod + proxies + ztunnel via one helm upgrade.
+#   4. Enable ISTIO_DUAL_STACK on istiod + proxies via one helm upgrade. ztunnel
+#      is dual-stack natively, so it picks up IPv6 from the mesh without a flag.
 #   5. Verify IPv6 now works on both data planes and IPv4 still works.
 #   6. Restore ISTIO_DUAL_STACK to false.
 # ---------------------------------------------------------------------------
@@ -196,8 +197,17 @@ echo "Gateway pod IPs: v4='${GW_V4}' v6='${GW_V6}'"
 # --- ambient side ---
 apply_ambient_workloads
 
-SERVER_V4=$(kubectl get pod -n "${AMBIENT_NS}" -l app=server -o jsonpath='{.items[0].status.podIP}')
-SERVER_V6=$(kubectl get pod -n "${AMBIENT_NS}" -l app=server -o jsonpath='{.items[0].status.podIPs[1].ip}')
+# Classify the server pod's IPs by family rather than by position: Kubernetes
+# orders podIPs by the cluster's ipFamilies, so index 1 is not guaranteed to be
+# IPv6 (same approach as gw_pod_ips above).
+SERVER_V4=""
+SERVER_V6=""
+for ip in $(kubectl get pod -n "${AMBIENT_NS}" -l app=server -o jsonpath='{.items[0].status.podIPs[*].ip}'); do
+  case "${ip}" in
+    *:*) SERVER_V6="${ip}" ;;
+    *)   SERVER_V4="${ip}" ;;
+  esac
+done
 echo "Ambient server pod IPs: v4='${SERVER_V4}' v6='${SERVER_V6}'"
 [ -n "${SERVER_V6}" ] || fail "ambient server pod has no IPv6 address on a dual-stack cluster"
 
@@ -217,7 +227,7 @@ gw_expect_http_fail "${GW_V6}" "gateway IPv6 (flag OFF)"
 ambient_wait "-4" "${SERVER_V4}" "ambient IPv4 (flag OFF)"
 
 # ===========================================================================
-# 3. Enable ISTIO_DUAL_STACK on all data planes at once
+# 3. Enable ISTIO_DUAL_STACK mesh-wide via istiod
 # ===========================================================================
 helm upgrade "${HELM_RELEASE}" "${HELM_CHART_PATH}" \
   --namespace "${ISTIO_NAMESPACE}" \
@@ -225,8 +235,7 @@ helm upgrade "${HELM_RELEASE}" "${HELM_CHART_PATH}" \
   --wait \
   --reuse-values \
   --set 'istiod.env.ISTIO_DUAL_STACK=true' \
-  --set-string 'istiod.meshConfig.defaultConfig.proxyMetadata.ISTIO_DUAL_STACK=true' \
-  --set 'ztunnel.env.ISTIO_DUAL_STACK=true'
+  --set-string 'istiod.meshConfig.defaultConfig.proxyMetadata.ISTIO_DUAL_STACK=true'
 kubectl rollout status deployment/istiod -n "${ISTIO_NAMESPACE}" --timeout=120s
 kubectl rollout status daemonset/ztunnel -n "${ISTIO_NAMESPACE}" --timeout=120s
 
@@ -269,8 +278,7 @@ helm upgrade "${HELM_RELEASE}" "${HELM_CHART_PATH}" \
   --wait \
   --reuse-values \
   --set 'istiod.env.ISTIO_DUAL_STACK=false' \
-  --set-string 'istiod.meshConfig.defaultConfig.proxyMetadata.ISTIO_DUAL_STACK=false' \
-  --set 'ztunnel.env.ISTIO_DUAL_STACK=false'
+  --set-string 'istiod.meshConfig.defaultConfig.proxyMetadata.ISTIO_DUAL_STACK=false'
 kubectl rollout status deployment/istiod -n "${ISTIO_NAMESPACE}" --timeout=120s
 kubectl rollout status daemonset/ztunnel -n "${ISTIO_NAMESPACE}" --timeout=120s
 kubectl rollout status "deployment/${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" --timeout=120s || recreate_gateway
