@@ -3,45 +3,11 @@ on:
   workflow_call: {}
 
 jobs:
-  integration-test:
+  # Build and lint the chart once. The matrix legs below differ only in cluster
+  # IP family, so this setup — which does not depend on matrix.* — runs a single
+  # time and ships the extracted chart to the legs as an artifact.
+  build-and-lint:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # Each job runs an explicit list of tests on a cluster of the matching
-        # IP family — no wildcard, and dual-stack tests are never mixed with the
-        # general functional tests.
-        include:
-          # Single-stack IPv4: gateway dns_lookup_family must be V4_ONLY, IPv4
-          # works, no IPv6 path. Istio auto-detects the stack (no flag needed).
-          - name: ipv4-stack
-            ip_family: ipv4
-            kind_config: tests/kind-ipv4.yaml
-            tests: gateway-ip-family
-            require_dual_stack: "false"
-          # Single-stack IPv6: gateway dns_lookup_family must be V6_ONLY, IPv6
-          # works. Istio auto-detects the stack (no flag needed).
-          - name: ipv6-stack
-            ip_family: ipv6
-            kind_config: tests/kind-ipv6.yaml
-            tests: gateway-ip-family
-            require_dual_stack: "false"
-          # Dual-stack: ISTIO_DUAL_STACK gates both the gateway (Envoy
-          # dns_lookup_family + north-south IPv6) and ambient (ztunnel
-          # east-west IPv6) data planes — all covered by istio-dual-stack.
-          - name: dual-stack
-            ip_family: dual
-            kind_config: tests/kind-dual-stack.yaml
-            tests: istio-dual-stack
-            require_dual_stack: "true"
-          # General functional tests (not IP-family specific), on a plain
-          # single-stack IPv4 cluster — kept separate from the dual-stack tests.
-          - name: functional
-            ip_family: ipv4
-            kind_config: tests/kind-ipv4.yaml
-            tests: gateway num-trusted-proxies rollout
-            require_dual_stack: "false"
-    name: integration-test (${{ matrix.name }})
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -88,6 +54,71 @@ jobs:
       # Lint chart (includes schema validation)
       - name: Run ct lint
         run: ct lint --all --chart-dirs ./helm-templates-extracted/qubership-istio
+
+      # Ship the built chart (with vendored charts/) so the matrix legs install
+      # the same artifact instead of each rebuilding the transfer image.
+      - name: Upload extracted chart
+        uses: actions/upload-artifact@v4
+        with:
+          name: helm-templates-extracted
+          path: ./helm-templates-extracted
+
+  integration-test:
+    needs: build-and-lint
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each job runs an explicit list of tests on a cluster of the matching
+        # IP family — no wildcard, and dual-stack tests are never mixed with the
+        # general functional tests.
+        include:
+          # Single-stack IPv4: gateway dns_lookup_family must be V4_ONLY, IPv4
+          # works, no IPv6 path. Istio auto-detects the stack (no flag needed).
+          - name: ipv4-stack
+            ip_family: ipv4
+            kind_config: tests/kind-ipv4.yaml
+            tests: gateway-ip-family
+            require_dual_stack: "false"
+          # Single-stack IPv6: gateway dns_lookup_family must be V6_ONLY, IPv6
+          # works. Istio auto-detects the stack (no flag needed).
+          - name: ipv6-stack
+            ip_family: ipv6
+            kind_config: tests/kind-ipv6.yaml
+            tests: gateway-ip-family
+            require_dual_stack: "false"
+          # Dual-stack: ISTIO_DUAL_STACK gates both the gateway (Envoy
+          # dns_lookup_family + north-south IPv6) and ambient (ztunnel
+          # east-west IPv6) data planes — all covered by istio-dual-stack.
+          - name: dual-stack
+            ip_family: dual
+            kind_config: tests/kind-dual-stack.yaml
+            tests: istio-dual-stack
+            require_dual_stack: "true"
+          # General functional tests (not IP-family specific), on a plain
+          # single-stack IPv4 cluster — kept separate from the dual-stack tests.
+          - name: functional
+            ip_family: ipv4
+            kind_config: tests/kind-ipv4.yaml
+            tests: gateway num-trusted-proxies rollout
+            require_dual_stack: "false"
+    name: integration-test (${{ matrix.name }})
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      # The chart (with vendored charts/) was built and linted once by the
+      # build-and-lint job; restore it instead of rebuilding the transfer image.
+      - name: Download extracted chart
+        uses: actions/download-artifact@v8
+        with:
+          name: helm-templates-extracted
+          path: ./helm-templates-extracted
+
+      - name: Install Helm 4
+        uses: azure/setup-helm@v5
+        with:
+          version: v4.0.1
 
       # kind needs IPv6 enabled in the Docker daemon for ipv6/dual clusters.
       # Merge into the runner's existing daemon.json rather than overwrite it,
