@@ -1,0 +1,12 @@
+# kind cluster configuration used by the integration-test workflow.
+#
+# `ipFamily: dual` makes kind hand out both an IPv4 and an IPv6 address to every
+# pod and a dual-stack clusterIP to every Service. This is what lets the
+# dual-stack tests (tests/istio-dual-stack, tests/gateway-ip-family)
+# actually exercise the IPv6 data path instead of silently skipping it on a
+# single-stack cluster. The bundled kindnetd CNI supports dual-stack out of the
+# box, so no extra CNI install is required.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  ipFamily: dual
