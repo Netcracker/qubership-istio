@@ -8,6 +8,7 @@
 {{- end -}}
 {{- $vwcNames := list (printf "istio-validator%s-%s" $rev .Values.global.istioNamespace) -}}
 {{- $c := dict "dropped" 0 "narrowed" 0 "readerStripped" 0 "sawMain" 0 "sawReader" 0 -}}
+{{- $out := list -}}
 
 {{- /* --- istiod-clusterrole: drop secrets rule, split webhook rules --- */ -}}
 {{- range $raw := (include "qubership.istiod-clusterrole-upstream" . | splitList "\n---\n") -}}
@@ -35,8 +36,7 @@
 {{- end -}}
 {{- $_ := set $doc "rules" $newRules -}}
 {{- end -}}
----
-{{ toYaml $doc }}
+{{- $out = append $out (toYaml $doc) -}}
 {{- end -}}
 {{- end -}}
 
@@ -58,8 +58,7 @@
 {{- end -}}
 {{- $_ := set $doc "rules" $newRules -}}
 {{- end -}}
----
-{{ toYaml $doc }}
+{{- $out = append $out (toYaml $doc) -}}
 {{- end -}}
 {{- end -}}
 
@@ -75,3 +74,7 @@
 {{- fail (printf "qubership istio-reader-clusterrole transform: expected to strip cluster-wide secrets from the reader read rule, matched readerStripped=%v — upstream reader ClusterRole shape changed, re-review RBAC" $c.readerStripped) -}}
 {{- end -}}
 {{- end -}}
+{{- range $d := $out }}
+---
+{{ $d }}
+{{- end }}

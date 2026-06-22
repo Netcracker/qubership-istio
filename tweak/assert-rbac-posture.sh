@@ -12,6 +12,18 @@ rendered=$(helm template qubership-istio "${CHART}" \
   --set MONITORING_ENABLED=false \
   --set 'istiod.qubership.secretsNamespaces={rbac-smoke-ns}')
 
+missing=""
+for role in istiod-clusterrole istiod-gateway-controller istio-reader-clusterrole; do
+  found=$(echo "${rendered}" | yq ea "
+    select(.kind == \"ClusterRole\" and (.metadata.name | test(\"^${role}-\")) and (.rules | length > 0))
+    | .metadata.name" | head -n1)
+  [ -z "${found}" ] && missing="${missing} ${role}"
+done
+if [ -n "${missing}" ]; then
+  echo "::error::expected istiod ClusterRole(s) missing or empty after transform:${missing}" >&2
+  exit 1
+fi
+
 offenders=$(echo "${rendered}" | yq ea '
   select(.kind == "ClusterRole")
   | select([.rules[] | select(((.apiGroups // []) | contains([""])) and ((.resources // []) | contains(["secrets"])))] | length > 0)
@@ -21,4 +33,4 @@ if [ -n "${offenders}" ]; then
   echo "::error::ClusterRole(s) still grant cluster-wide secrets read: ${offenders}" >&2
   exit 1
 fi
-echo "OK: no ClusterRole grants cluster-wide secrets"
+echo "OK: istiod ClusterRoles present and non-empty; none grant cluster-wide secrets"
