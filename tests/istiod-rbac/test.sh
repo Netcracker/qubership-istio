@@ -67,6 +67,9 @@ assert_cannot update mutatingwebhookconfigurations
 assert_cannot update mutatingwebhookconfigurations/some-foreign-webhook
 
 assert_can    update "validatingwebhookconfigurations/${VALIDATOR}"
+# istiod's validation controller patches the runtime "istiod-default-validator"
+# too; both names must be writable or istiod loops on a Forbidden error.
+assert_can    update "validatingwebhookconfigurations/istiod-default-validator"
 assert_can    list   validatingwebhookconfigurations
 assert_cannot update validatingwebhookconfigurations
 # patch was never granted for validating webhooks even by name.

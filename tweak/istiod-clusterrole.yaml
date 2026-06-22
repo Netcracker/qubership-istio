@@ -6,7 +6,10 @@
 {{- range $tag := (default (list) .Values.revisionTags) -}}
 {{- $mwcNames = append $mwcNames (printf "istio-revision-tag-%s-%s" $tag $ns) -}}
 {{- end -}}
-{{- $vwcNames := list (printf "istio-validator%s-%s" $rev .Values.global.istioNamespace) -}}
+{{- /* istiod manages two validating webhooks: the chart-created revisioned one and
+       the runtime "istiod-default-validator" it patches caBundle on. Both must be
+       writable, otherwise the validation controller loops on a Forbidden error. */ -}}
+{{- $vwcNames := list "istiod-default-validator" (printf "istio-validator%s-%s" $rev .Values.global.istioNamespace) -}}
 {{- $c := dict "dropped" 0 "narrowed" 0 "readerStripped" 0 "sawMain" 0 "sawReader" 0 -}}
 {{- $out := list -}}
 
