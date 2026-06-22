@@ -88,6 +88,7 @@ jobs:
       - name: Inject tweak templates into subchart packages
         run: |
           bash tweak/tweak.sh
+          bash tweak/assert-rbac-posture.sh helm-templates/qubership-istio
 
       - name: Upload helm-templates artifact
         uses: actions/upload-artifact@v7

@@ -1,0 +1,77 @@
+{{- $rev := "" -}}
+{{- if not (eq .Values.revision "") }}{{- $rev = printf "-%s" .Values.revision }}{{- end -}}
+{{- $ns := .Release.Namespace -}}
+{{- $awg := list "admissionregistration.k8s.io" -}}
+{{- $mwcNames := list (printf "istio-sidecar-injector%s-%s" $rev $ns) -}}
+{{- range $tag := (default (list) .Values.revisionTags) -}}
+{{- $mwcNames = append $mwcNames (printf "istio-revision-tag-%s-%s" $tag $ns) -}}
+{{- end -}}
+{{- $vwcNames := list (printf "istio-validator%s-%s" $rev .Values.global.istioNamespace) -}}
+{{- $c := dict "dropped" 0 "narrowed" 0 "readerStripped" 0 "sawMain" 0 "sawReader" 0 -}}
+
+{{- /* --- istiod-clusterrole: drop secrets rule, split webhook rules --- */ -}}
+{{- range $raw := (include "qubership.istiod-clusterrole-upstream" . | splitList "\n---\n") -}}
+{{- $doc := $raw | fromYaml -}}
+{{- if $doc.kind -}}
+{{- if and (eq $doc.kind "ClusterRole") (hasPrefix "istiod-clusterrole" (dig "metadata" "name" "" $doc)) -}}
+{{- $_ := set $c "sawMain" (add1 (int $c.sawMain)) -}}
+{{- end -}}
+{{- if $doc.rules -}}
+{{- $newRules := list -}}
+{{- range $r := $doc.rules -}}
+{{- if and (has "secrets" $r.resources) (has "" $r.apiGroups) -}}
+{{- $_ := set $c "dropped" (add1 (int $c.dropped)) -}}
+{{- else if has "mutatingwebhookconfigurations" $r.resources -}}
+{{- $newRules = append $newRules (dict "apiGroups" $awg "resources" (list "mutatingwebhookconfigurations") "verbs" (list "list" "watch")) -}}
+{{- $newRules = append $newRules (dict "apiGroups" $awg "resources" (list "mutatingwebhookconfigurations") "resourceNames" $mwcNames "verbs" (list "get" "update" "patch")) -}}
+{{- $_ := set $c "narrowed" (add1 (int $c.narrowed)) -}}
+{{- else if has "validatingwebhookconfigurations" $r.resources -}}
+{{- $newRules = append $newRules (dict "apiGroups" $awg "resources" (list "validatingwebhookconfigurations") "verbs" (list "list" "watch")) -}}
+{{- $newRules = append $newRules (dict "apiGroups" $awg "resources" (list "validatingwebhookconfigurations") "resourceNames" $vwcNames "verbs" (list "get" "update")) -}}
+{{- $_ := set $c "narrowed" (add1 (int $c.narrowed)) -}}
+{{- else -}}
+{{- $newRules = append $newRules $r -}}
+{{- end -}}
+{{- end -}}
+{{- $_ := set $doc "rules" $newRules -}}
+{{- end -}}
+---
+{{ toYaml $doc }}
+{{- end -}}
+{{- end -}}
+
+{{- /* --- istio-reader-clusterrole: strip "secrets" from the combined read rule --- */ -}}
+{{- range $raw := (include "qubership.istio-reader-clusterrole-upstream" . | splitList "\n---\n") -}}
+{{- $doc := $raw | fromYaml -}}
+{{- if $doc.kind -}}
+{{- if and (eq $doc.kind "ClusterRole") (hasPrefix "istio-reader-clusterrole" (dig "metadata" "name" "" $doc)) -}}
+{{- $_ := set $c "sawReader" (add1 (int $c.sawReader)) -}}
+{{- end -}}
+{{- if $doc.rules -}}
+{{- $newRules := list -}}
+{{- range $r := $doc.rules -}}
+{{- if and (has "secrets" $r.resources) (has "" $r.apiGroups) -}}
+{{- $_ := set $r "resources" (without $r.resources "secrets") -}}
+{{- $_ := set $c "readerStripped" (add1 (int $c.readerStripped)) -}}
+{{- end -}}
+{{- $newRules = append $newRules $r -}}
+{{- end -}}
+{{- $_ := set $doc "rules" $newRules -}}
+{{- end -}}
+---
+{{ toYaml $doc }}
+{{- end -}}
+{{- end -}}
+
+{{- /* --- guards: fail only if the TARGETED rules changed shape (not on a
+       plain version bump); prevents the narrowing from silently vanishing --- */ -}}
+{{- if gt (int $c.sawMain) 0 -}}
+{{- if or (lt (int $c.dropped) 1) (lt (int $c.narrowed) 2) -}}
+{{- fail (printf "qubership istiod-clusterrole transform: expected to drop the cluster-wide secrets rule and narrow 2 webhook rules, matched dropped=%v narrowed=%v — upstream ClusterRole shape changed, re-review RBAC" $c.dropped $c.narrowed) -}}
+{{- end -}}
+{{- end -}}
+{{- if gt (int $c.sawReader) 0 -}}
+{{- if lt (int $c.readerStripped) 1 -}}
+{{- fail (printf "qubership istio-reader-clusterrole transform: expected to strip cluster-wide secrets from the reader read rule, matched readerStripped=%v — upstream reader ClusterRole shape changed, re-review RBAC" $c.readerStripped) -}}
+{{- end -}}
+{{- end -}}
