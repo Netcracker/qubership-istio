@@ -1,0 +1,4 @@
+name: grafana-dashboard-limits
+version: 1.0.0
+description: Adds CPU and memory resource-limit overlays to Grafana resource-usage panels using kube_pod_container_resource_limits as a red reference line.
+author: Qubership
