@@ -1,19 +1,25 @@
 #!/usr/bin/env bash
-# Asserts the RBAC security posture of the tweaked chart: no ClusterRole may grant
-# cluster-wide secret read (both istiod-clusterrole and istio-reader-clusterrole must
-# be narrowed). Rendering and the transform's fail-guards are already exercised by
-# `ct lint`; this adds the SEMANTIC check lint cannot do. Run right after tweak.sh.
+# Asserts the RBAC posture of the tweaked chart's istiod ClusterRole:
+#   1. the istiod ClusterRoles render as real, non-empty objects (a separator slip
+#      in the transform can make them unparseable and silently unapplied at install);
+#   2. webhook writes are narrowed — no rule grants update/patch on webhook configs
+#      without resourceNames.
+# Rendering and the transform's fail-guard are already exercised by `ct lint`; this
+# adds the SEMANTIC checks lint cannot do. Run right after tweak.sh.
+#
+# Note: cluster-wide secrets read is intentionally NOT asserted against — istiod's
+# Gateway API credential informer requires it (see tweak/istiod-clusterrole.yaml).
 set -euo pipefail
 
 CHART="${1:-helm-templates/qubership-istio}"
 
 rendered=$(helm template qubership-istio "${CHART}" \
   --namespace istio-system \
-  --set MONITORING_ENABLED=false \
-  --set 'istiod.qubership.secretsNamespaces={rbac-smoke-ns}')
+  --set MONITORING_ENABLED=false)
 
+# 1. Positive existence check.
 missing=""
-for role in istiod-clusterrole istiod-gateway-controller istio-reader-clusterrole; do
+for role in istiod-clusterrole istiod-gateway-controller; do
   found=$(echo "${rendered}" | yq ea "
     select(.kind == \"ClusterRole\" and (.metadata.name | test(\"^${role}-\")) and (.rules | length > 0))
     | .metadata.name" | head -n1)
@@ -24,13 +30,19 @@ if [ -n "${missing}" ]; then
   exit 1
 fi
 
-offenders=$(echo "${rendered}" | yq ea '
-  select(.kind == "ClusterRole")
-  | select([.rules[] | select(((.apiGroups // []) | contains([""])) and ((.resources // []) | contains(["secrets"])))] | length > 0)
-  | .metadata.name')
+# 2. Webhook writes must be resourceNames-scoped (no unrestricted update/patch).
+unscoped=$(echo "${rendered}" | yq ea '
+  select(.kind == "ClusterRole" and (.metadata.name | test("^istiod-clusterrole-")))
+  | .rules[]
+  | select(
+      ((.resources // []) | (contains(["mutatingwebhookconfigurations"]) or contains(["validatingwebhookconfigurations"])))
+      and ((.verbs // []) | (contains(["update"]) or contains(["patch"])))
+      and (has("resourceNames") | not)
+    )
+  | (.resources | join(","))')
 
-if [ -n "${offenders}" ]; then
-  echo "::error::ClusterRole(s) still grant cluster-wide secrets read: ${offenders}" >&2
+if [ -n "${unscoped}" ]; then
+  echo "::error::istiod-clusterrole grants unrestricted webhook write (no resourceNames): ${unscoped}" >&2
   exit 1
 fi
-echo "OK: istiod ClusterRoles present and non-empty; none grant cluster-wide secrets"
+echo "OK: istiod ClusterRoles present and non-empty; webhook writes are resourceNames-scoped"

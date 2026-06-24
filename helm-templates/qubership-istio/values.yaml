@@ -96,9 +96,6 @@ istiod:
       proxyMetadata:
         ISTIO_DUAL_STACK: "false"
 
-  qubership:
-    secretsNamespaces: []
-
   gatewayClasses:
     istio:
       service:

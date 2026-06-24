@@ -10,23 +10,14 @@ tar -xzf "${TGZ}" -C "${CHARTS_DIR}"
 cp tweak/zzzz_tweak.yaml "${CHARTS_DIR}/${chart}/templates/"
 if [ "${chart}" = "istiod" ]; then
   TPL_DIR="${CHARTS_DIR}/${chart}/templates"
-  # istiod-clusterrole -> qubership.istiod-clusterrole-upstream
   {
     echo '{{- define "qubership.istiod-clusterrole-upstream" -}}'
     cat "${TPL_DIR}/clusterrole.yaml"
     echo '{{- end -}}'
   } > "${TPL_DIR}/_clusterrole-upstream.tpl"
   rm "${TPL_DIR}/clusterrole.yaml"
-  # istio-reader-clusterrole -> qubership.istio-reader-clusterrole-upstream
-  {
-    echo '{{- define "qubership.istio-reader-clusterrole-upstream" -}}'
-    cat "${TPL_DIR}/reader-clusterrole.yaml"
-    echo '{{- end -}}'
-  } > "${TPL_DIR}/_reader-clusterrole-upstream.tpl"
-  rm "${TPL_DIR}/reader-clusterrole.yaml"
 
   cp tweak/istiod-clusterrole.yaml "${TPL_DIR}/clusterrole.yaml"
-  cp tweak/secrets-reader-rbac.yaml "${TPL_DIR}/"
 fi
 tar -czf "${TGZ}" -C "${CHARTS_DIR}" "${chart}"
 rm -rf "${CHARTS_DIR}/${chart}"
