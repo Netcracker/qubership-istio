@@ -1,8 +1,17 @@
 global:
   profile: ambient
-  
+
   # namespace where istio will be installed
   istioNamespace: istio-system
+
+  # Security context for the injected proxy (sidecars and Gateway API proxies).
+  # The injection template already drops all capabilities, sets a read-only root
+  # filesystem, and runs as a non-root user. These settings complete the baseline:
+  # they keep privilege escalation off and pin the default seccomp profile.
+  proxy:
+    privileged: false
+    seccompProfile:
+      type: RuntimeDefault
 
   # Default hub for Istio images.
   # hub: docker.io/istio
@@ -48,6 +57,14 @@ cni:
     limits:
       cpu: 400m
       memory: 512Mi
+
+  # The CNI agent installs network configuration on each node, so it must run as
+  # root and keep NET_ADMIN, NET_RAW, SYS_ADMIN, SYS_PTRACE, and DAC_OVERRIDE, and
+  # it mounts host paths. These privileges are required and cannot be dropped.
+  # Pin the seccomp profile, which is the one baseline control the agent can still
+  # honor.
+  seccompProfile:
+    type: RuntimeDefault
 
 # ---------------------------------------------------------------------------
 # istiod — control plane (Pilot / istiod)
@@ -101,6 +118,18 @@ istiod:
       service:
         spec:
           type: ClusterIP
+
+  # istiod already runs as non-root with a read-only root filesystem, no privilege
+  # escalation, and all capabilities dropped. Pin the seccomp profile to complete
+  # the baseline.
+  seccompProfile:
+    type: RuntimeDefault
+
+  gateways:
+    # Templated Gateway API gateways. Pin the seccomp profile. Leave securityContext
+    # unset so Istio applies the minimum privileges needed to bind ports 80 and 443.
+    seccompProfile:
+      type: RuntimeDefault
 
   resources:
     requests:
