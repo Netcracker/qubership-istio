@@ -4,10 +4,6 @@ global:
   # namespace where istio will be installed
   istioNamespace: istio-system
 
-  # Security context for the injected proxy (sidecars and Gateway API proxies).
-  # The injection template already drops all capabilities, sets a read-only root
-  # filesystem, and runs as a non-root user. These settings complete the baseline:
-  # they keep privilege escalation off and pin the default seccomp profile.
   proxy:
     privileged: false
     seccompProfile:
