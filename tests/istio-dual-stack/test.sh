@@ -59,6 +59,10 @@ dump_gw_diag() {
     -l "gateway.networking.k8s.io/gateway-name=${GW_NAME}" -o wide || true
   kubectl describe pod -n "${ISTIO_NAMESPACE}" \
     -l "gateway.networking.k8s.io/gateway-name=${GW_NAME}" || true
+  echo "----- istiod pod state (restarts / OOM) -----"
+  kubectl get pods -n "${ISTIO_NAMESPACE}" -l app=istiod -o wide || true
+  kubectl describe pods -n "${ISTIO_NAMESPACE}" -l app=istiod \
+    | grep -iE 'restart count|last state|reason|exit code|oom|memory|cpu' || true
   kubectl get events -n "${ISTIO_NAMESPACE}" --sort-by=.lastTimestamp 2>/dev/null | tail -30 || true
   echo "===== end diagnostics ====="
 }
@@ -166,27 +170,36 @@ if [ "${HAS_V4}" != "true" ] || [ "${HAS_V6}" != "true" ]; then
 fi
 echo "OK: dual-stack cluster (node podCIDRs: ${NODE_CIDRS})"
 
-# Ensure istiod is fully up AND done rolling before creating Gateways. A ready
-# istiod can still be mid-roll (helm install returns while a second template
-# revision is pending); creating a Gateway against a churning istiod leaves the
-# managed Deployment flapping (AddressNotAssigned / no endpoints). Wait until the
-# rollout is settled (observedGeneration caught up, all replicas updated) and
-# stays settled across consecutive checks.
+# Ensure istiod is fully up AND stable before creating Gateways. A ready istiod
+# can still be mid-roll (pending template revision) OR its pod can restart
+# (OOM/liveness on a tight runner); creating a Gateway against a churning istiod
+# leaves the managed Deployment flapping (AddressNotAssigned / no endpoints).
+# Require: rollout done (gen==observedGeneration) AND the SAME istiod pod Ready
+# with an unchanging restart count — held stable across consecutive checks.
 wait_istiod_settled() {
-  local stable=0 i gen obs
-  for i in $(seq 1 40); do
+  local stable=0 i gen obs pod rc ready prev_pod="" prev_rc=""
+  for i in $(seq 1 60); do
     kubectl rollout status deployment/istiod -n "${ISTIO_NAMESPACE}" --timeout=180s >/dev/null 2>&1 || true
     gen=$(kubectl get deploy istiod -n "${ISTIO_NAMESPACE}" -o jsonpath='{.metadata.generation}')
     obs=$(kubectl get deploy istiod -n "${ISTIO_NAMESPACE}" -o jsonpath='{.status.observedGeneration}')
-    if [ -n "${gen}" ] && [ "${gen}" = "${obs}" ]; then
+    pod=$(kubectl get pods -n "${ISTIO_NAMESPACE}" -l app=istiod \
+      -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    rc=$(kubectl get pods -n "${ISTIO_NAMESPACE}" -l app=istiod \
+      -o jsonpath='{.items[0].status.containerStatuses[0].restartCount}' 2>/dev/null)
+    ready=$(kubectl get pods -n "${ISTIO_NAMESPACE}" -l app=istiod \
+      -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
+    if [ -n "${gen}" ] && [ "${gen}" = "${obs}" ] && [ "${ready}" = "true" ] \
+       && [ "${pod}" = "${prev_pod}" ] && [ "${rc}" = "${prev_rc}" ]; then
       stable=$((stable + 1))
-      [ "${stable}" -ge 3 ] && { echo "OK: istiod settled (gen=${gen})"; return 0; }
+      [ "${stable}" -ge 3 ] && { echo "OK: istiod settled (gen=${gen} pod=${pod} restarts=${rc})"; return 0; }
     else
       stable=0
     fi
+    prev_pod="${pod}"
+    prev_rc="${rc}"
     sleep 5
   done
-  fail "istiod did not settle (gen=${gen} obs=${obs})"
+  fail "istiod did not settle (gen=${gen} obs=${obs} pod=${pod} ready=${ready} restarts=${rc})"
 }
 wait_istiod_settled
 
