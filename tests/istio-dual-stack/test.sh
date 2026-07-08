@@ -85,20 +85,24 @@ EOF
     echo "Waiting for gateway Deployment to appear (attempt ${i}/24)..."
     sleep 5
   done
-  # Poll Programmed with a big budget instead of a fixed wait. istiod rolls once
-  # shortly after install and churns the managed gateway Deployment; a fixed
-  # `kubectl wait` expires mid-churn. Programmed flips True once istiod settles
-  # and a gateway pod is a ready endpoint — wait that out.
-  local prog=""
+  # Gate on the Deployment being available (pods Ready => Service endpoints =>
+  # traffic flows), NOT the Gateway 'Programmed' condition. We drive traffic to
+  # the gateway pod IP directly, so Programmed is irrelevant — and istio can
+  # leave it stuck False after an istiod roll even when the data plane is
+  # healthy. Big budget tolerates the one early istiod roll churning the pod.
+  local avail=""
   for i in $(seq 1 60); do
-    prog=$(kubectl get gateway "${GW_NAME}" -n "${ISTIO_NAMESPACE}" \
-      -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}' 2>/dev/null)
-    [ "${prog}" = "True" ] && { echo "OK: gateway Programmed"; return 0; }
-    echo "Waiting for gateway Programmed (attempt ${i}/60, status=${prog:-<none>})..."
+    avail=$(kubectl get deploy "${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" \
+      -o jsonpath='{.status.availableReplicas}' 2>/dev/null)
+    if [ "${avail:-0}" -ge 1 ] 2>/dev/null; then
+      echo "OK: gateway Deployment available (${avail} replica)"
+      return 0
+    fi
+    echo "Waiting for gateway Deployment available (attempt ${i}/60, avail=${avail:-0})..."
     sleep 6
   done
   dump_gw_diag
-  fail "gateway ${GW_NAME} not Programmed (last status=${prog:-<none>})"
+  fail "gateway ${GW_NAME} Deployment not available"
 }
 
 recreate_gateway() {
