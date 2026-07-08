@@ -183,7 +183,8 @@ jobs:
             --timeout 3m \
             --wait \
             --force-conflicts \
-            --set MONITORING_ENABLED=false
+            --set MONITORING_ENABLED=false \
+            --set istiod.autoscaleEnabled=false
 
       # Run each named test explicitly (one test-suite invocation per test) so
       # no job depends on a wildcard. On the dual-stack cluster
