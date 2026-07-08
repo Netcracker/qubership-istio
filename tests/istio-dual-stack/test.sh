@@ -163,6 +163,27 @@ gw_pod_ips() {  # arg: pod name
   done
 }
 
+# Curl the gateway on its CURRENT pod IP of the given family, re-resolving the
+# pod + IP on every attempt. Right after enable/recreate the gateway pod can
+# still be rolling, so a once-read pod IP goes stale (blackhole -> curl exit 28).
+gw_wait_pod() {  # family(-4|-6) label
+  local fam="$1" label="$2" pod ip url i
+  for i in $(seq 1 24); do
+    pod=$(gw_pod)
+    [ -n "${pod}" ] && gw_pod_ips "${pod}"
+    if [ "${fam}" = "-6" ]; then ip="${GW_V6}"; url="http://[${ip}]:80/get"; else ip="${GW_V4}"; url="http://${ip}:80/get"; fi
+    if [ -n "${ip}" ] && kubectl exec -n default "${CLIENT_POD}" -- \
+         curl -sf --max-time 8 "${url}" >/dev/null 2>&1; then
+      echo "OK: ${label} works (pod=${pod} ip=${ip})"
+      return 0
+    fi
+    echo "Attempt ${i}: waiting for ${label} (pod=${pod} ip=${ip:-none})..."
+    sleep 5
+  done
+  dump_gw_diag
+  fail "${label} failed"
+}
+
 # ===========================================================================
 # Guard: this test is meaningful only on a dual-stack cluster.
 # Detect via node podCIDRs — the kubernetes Service is SingleStack and would
@@ -306,8 +327,8 @@ echo "Gateway Envoy dns_lookup_family (flag ON) = ${DLF:-<not found>}"
 [ -n "${DLF}" ] || fail "DNS probe cluster ${DNS_PROBE_CLUSTER} not found"
 is_dual_capable_dns_family "${DLF}" || fail "expected a dual-capable dns_lookup_family with flag on, got '${DLF}'"
 echo "OK: gateway dns_lookup_family=${DLF} (dual-capable, was V4_ONLY when off)"
-gw_wait_http_ok "${GW_V4}" "gateway IPv4 (flag ON)"
-gw_wait_http_ok "${GW_V6}" "gateway IPv6 (flag ON)"
+gw_wait_pod "-4" "gateway IPv4 (flag ON)"
+gw_wait_pod "-6" "gateway IPv6 (flag ON)"
 
 # --- ztunnel: IPv4 still works and IPv6 pod-to-pod now works through ztunnel ---
 ambient_wait "-4" "${SERVER_V4}" "ambient IPv4 (flag ON)"
