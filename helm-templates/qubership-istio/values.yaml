@@ -1,8 +1,13 @@
 global:
   profile: ambient
-  
+
   # namespace where istio will be installed
   istioNamespace: istio-system
+
+  proxy:
+    privileged: false
+    seccompProfile:
+      type: RuntimeDefault
 
   # Default hub for Istio images.
   # hub: docker.io/istio
@@ -48,6 +53,9 @@ cni:
     limits:
       cpu: 400m
       memory: 512Mi
+
+  seccompProfile:
+    type: RuntimeDefault
 
 # ---------------------------------------------------------------------------
 # istiod — control plane (Pilot / istiod)
@@ -101,6 +109,13 @@ istiod:
       service:
         spec:
           type: ClusterIP
+
+  seccompProfile:
+    type: RuntimeDefault
+
+  gateways:
+    seccompProfile:
+      type: RuntimeDefault
 
   resources:
     requests:
