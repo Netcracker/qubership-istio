@@ -1,49 +1,24 @@
-{{- $rev := "" -}}
-{{- if not (eq .Values.revision "") }}{{- $rev = printf "-%s" .Values.revision }}{{- end -}}
-{{- $ns := .Release.Namespace -}}
-{{- $awg := list "admissionregistration.k8s.io" -}}
-{{- $mwcNames := list (printf "istio-sidecar-injector%s-%s" $rev $ns) -}}
-{{- range $tag := (default (list) .Values.revisionTags) -}}
-{{- $mwcNames = append $mwcNames (printf "istio-revision-tag-%s-%s" $tag $ns) -}}
-{{- end -}}
-{{- /* istiod manages two validating webhooks: the chart-created revisioned one and
-       the runtime "istiod-default-validator" it patches caBundle on. Both must be
-       writable, otherwise the validation controller loops on a Forbidden error. */ -}}
-{{- $vwcNames := list "istiod-default-validator" (printf "istio-validator%s-%s" $rev .Values.global.istioNamespace) -}}
-{{- $c := dict "narrowed" 0 "sawMain" 0 -}}
 {{- $out := list -}}
-
+{{- $dropped := 0 -}}
 {{- range $raw := (include "qubership.istiod-clusterrole-upstream" . | splitList "\n---\n") -}}
-{{- $doc := $raw | fromYaml -}}
-{{- if $doc.kind -}}
-{{- if and (eq $doc.kind "ClusterRole") (hasPrefix "istiod-clusterrole" (dig "metadata" "name" "" $doc)) -}}
-{{- $_ := set $c "sawMain" (add1 (int $c.sawMain)) -}}
+  {{- $doc := $raw | fromYaml -}}
+  {{- if $doc.kind -}}
+    {{- if hasPrefix "istiod-clusterrole" (dig "metadata" "name" "" $doc) -}}
+      {{- $keep := list -}}
+      {{- range $r := $doc.rules -}}
+        {{- if or (has "mutatingwebhookconfigurations" $r.resources) (has "validatingwebhookconfigurations" $r.resources) -}}
+          {{- $dropped = add1 $dropped -}}
+        {{- else -}}
+          {{- $keep = append $keep $r -}}
+        {{- end -}}
+      {{- end -}}
+      {{- $_ := set $doc "rules" $keep -}}
+    {{- end -}}
+    {{- $out = append $out (toYaml $doc) -}}
+  {{- end -}}
 {{- end -}}
-{{- if $doc.rules -}}
-{{- $newRules := list -}}
-{{- range $r := $doc.rules -}}
-{{- if has "mutatingwebhookconfigurations" $r.resources -}}
-{{- $newRules = append $newRules (dict "apiGroups" $awg "resources" (list "mutatingwebhookconfigurations") "verbs" (list "list" "watch")) -}}
-{{- $newRules = append $newRules (dict "apiGroups" $awg "resources" (list "mutatingwebhookconfigurations") "resourceNames" $mwcNames "verbs" (list "get" "update" "patch")) -}}
-{{- $_ := set $c "narrowed" (add1 (int $c.narrowed)) -}}
-{{- else if has "validatingwebhookconfigurations" $r.resources -}}
-{{- $newRules = append $newRules (dict "apiGroups" $awg "resources" (list "validatingwebhookconfigurations") "verbs" (list "list" "watch")) -}}
-{{- $newRules = append $newRules (dict "apiGroups" $awg "resources" (list "validatingwebhookconfigurations") "resourceNames" $vwcNames "verbs" (list "get" "update")) -}}
-{{- $_ := set $c "narrowed" (add1 (int $c.narrowed)) -}}
-{{- else -}}
-{{- $newRules = append $newRules $r -}}
-{{- end -}}
-{{- end -}}
-{{- $_ := set $doc "rules" $newRules -}}
-{{- end -}}
-{{- $out = append $out (toYaml $doc) -}}
-{{- end -}}
-{{- end -}}
-
-{{- if gt (int $c.sawMain) 0 -}}
-{{- if lt (int $c.narrowed) 2 -}}
-{{- fail (printf "qubership istiod-clusterrole transform: expected to narrow 2 webhook rules (mutating + validating), matched narrowed=%v — upstream ClusterRole shape changed, re-review RBAC" $c.narrowed) -}}
-{{- end -}}
+{{- if and $out (lt $dropped 2) -}}
+  {{- fail (printf "qubership istiod-clusterrole: expected to drop 2 webhook rules, dropped=%d — upstream ClusterRole shape changed, re-review RBAC" $dropped) -}}
 {{- end -}}
 {{- range $d := $out }}
 ---

@@ -4,21 +4,32 @@
 # even after istio zzz_profile.yaml is processed
 set -euo pipefail
 CHARTS_DIR=./helm-templates/qubership-istio/charts
-for chart in cni istiod ztunnel; do
-TGZ=$(ls ${CHARTS_DIR}/${chart}-*.tgz)
-tar -xzf "${TGZ}" -C "${CHARTS_DIR}"
-cp tweak/zzzz_tweak.yaml "${CHARTS_DIR}/${chart}/templates/"
-if [ "${chart}" = "istiod" ]; then
-  TPL_DIR="${CHARTS_DIR}/${chart}/templates"
-  {
-    echo '{{- define "qubership.istiod-clusterrole-upstream" -}}'
-    cat "${TPL_DIR}/clusterrole.yaml"
-    echo '{{- end -}}'
-  } > "${TPL_DIR}/_clusterrole-upstream.tpl"
-  rm "${TPL_DIR}/clusterrole.yaml"
 
-  cp tweak/istiod-clusterrole.yaml "${TPL_DIR}/clusterrole.yaml"
-fi
-tar -czf "${TGZ}" -C "${CHARTS_DIR}" "${chart}"
-rm -rf "${CHARTS_DIR}/${chart}"
+# 1. Unpack all subcharts.
+for chart in cni istiod ztunnel; do
+  tar -xzf "$(ls ${CHARTS_DIR}/${chart}-*.tgz)" -C "${CHARTS_DIR}"
+done
+
+# 2. Apply tweaks.
+# Common: inject the image-override template into every subchart.
+for chart in cni istiod ztunnel; do
+  cp tweak/zzzz_tweak.yaml "${CHARTS_DIR}/${chart}/templates/"
+done
+
+# istiod: subtract the broad webhook rules (wrap upstream ClusterRole as a partial,
+# swap in our transform) and add the narrowed istiod-webhook-rbac.yaml.
+TPL_DIR="${CHARTS_DIR}/istiod/templates"
+{
+  echo '{{- define "qubership.istiod-clusterrole-upstream" -}}'
+  cat "${TPL_DIR}/clusterrole.yaml"
+  echo '{{- end -}}'
+} > "${TPL_DIR}/_clusterrole-upstream.tpl"
+rm "${TPL_DIR}/clusterrole.yaml"
+cp tweak/istiod-clusterrole.yaml "${TPL_DIR}/clusterrole.yaml"
+cp tweak/istiod-webhook-rbac.yaml "${TPL_DIR}/"
+
+# 3. Repack all subcharts.
+for chart in cni istiod ztunnel; do
+  tar -czf "$(ls ${CHARTS_DIR}/${chart}-*.tgz)" -C "${CHARTS_DIR}" "${chart}"
+  rm -rf "${CHARTS_DIR}/${chart}"
 done
