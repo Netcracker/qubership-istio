@@ -166,11 +166,29 @@ if [ "${HAS_V4}" != "true" ] || [ "${HAS_V6}" != "true" ]; then
 fi
 echo "OK: dual-stack cluster (node podCIDRs: ${NODE_CIDRS})"
 
-# Ensure istiod is fully up before creating Gateways — creating a Gateway while
-# istiod's controllers are still starting can leave the managed Deployment in a
-# half-reconciled state (AddressNotAssigned / no endpoints).
-kubectl rollout status deployment/istiod -n "${ISTIO_NAMESPACE}" --timeout=180s
-kubectl wait --for=condition=Available deployment/istiod -n "${ISTIO_NAMESPACE}" --timeout=180s
+# Ensure istiod is fully up AND done rolling before creating Gateways. A ready
+# istiod can still be mid-roll (helm install returns while a second template
+# revision is pending); creating a Gateway against a churning istiod leaves the
+# managed Deployment flapping (AddressNotAssigned / no endpoints). Wait until the
+# rollout is settled (observedGeneration caught up, all replicas updated) and
+# stays settled across consecutive checks.
+wait_istiod_settled() {
+  local stable=0 i gen obs
+  for i in $(seq 1 40); do
+    kubectl rollout status deployment/istiod -n "${ISTIO_NAMESPACE}" --timeout=180s >/dev/null 2>&1 || true
+    gen=$(kubectl get deploy istiod -n "${ISTIO_NAMESPACE}" -o jsonpath='{.metadata.generation}')
+    obs=$(kubectl get deploy istiod -n "${ISTIO_NAMESPACE}" -o jsonpath='{.status.observedGeneration}')
+    if [ -n "${gen}" ] && [ "${gen}" = "${obs}" ]; then
+      stable=$((stable + 1))
+      [ "${stable}" -ge 3 ] && { echo "OK: istiod settled (gen=${gen})"; return 0; }
+    else
+      stable=0
+    fi
+    sleep 5
+  done
+  fail "istiod did not settle (gen=${gen} obs=${obs})"
+}
+wait_istiod_settled
 
 # ===========================================================================
 # 1. Deploy gateway (north-south) + ambient (east-west) workloads
