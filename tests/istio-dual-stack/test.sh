@@ -59,10 +59,19 @@ dump_gw_diag() {
     -l "gateway.networking.k8s.io/gateway-name=${GW_NAME}" -o wide || true
   kubectl describe pod -n "${ISTIO_NAMESPACE}" \
     -l "gateway.networking.k8s.io/gateway-name=${GW_NAME}" || true
-  echo "----- istiod pod state (restarts / OOM) -----"
+  echo "----- gateway pod Ready condition -----"
+  kubectl get pods -n "${ISTIO_NAMESPACE}" \
+    -l "gateway.networking.k8s.io/gateway-name=${GW_NAME}" \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"  ready="}{.status.containerStatuses[0].ready}{"  restarts="}{.status.containerStatuses[0].restartCount}{"  phase="}{.status.phase}{"\n"}{end}' || true
+  echo "----- istiod churn (why 2 replicasets?) -----"
   kubectl get pods -n "${ISTIO_NAMESPACE}" -l app=istiod -o wide || true
+  kubectl get rs -n "${ISTIO_NAMESPACE}" -l app=istiod \
+    -o custom-columns=NAME:.metadata.name,DESIRED:.spec.replicas,READY:.status.readyReplicas,REVISION:'.metadata.annotations.deployment\.kubernetes\.io/revision' || true
+  kubectl rollout history deployment/istiod -n "${ISTIO_NAMESPACE}" || true
+  kubectl get deploy istiod -n "${ISTIO_NAMESPACE}" \
+    -o jsonpath='gen={.metadata.generation}{"\n"}creationTs={.metadata.creationTimestamp}{"\n"}' || true
   kubectl describe pods -n "${ISTIO_NAMESPACE}" -l app=istiod \
-    | grep -iE 'restart count|last state|reason|exit code|oom|memory|cpu' || true
+    | grep -iE 'restart count|last state|reason:|exit code|oom|killing|unhealthy|probe' || true
   kubectl get events -n "${ISTIO_NAMESPACE}" --sort-by=.lastTimestamp 2>/dev/null | tail -30 || true
   echo "===== end diagnostics ====="
 }
