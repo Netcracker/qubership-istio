@@ -99,16 +99,20 @@ EOF
     echo "Waiting for gateway Deployment to appear (attempt ${i}/24)..."
     sleep 5
   done
-  # Pods Ready first (this is what makes the Service get endpoints and lets the
-  # gateway's address be assigned → Programmed).
-  if ! kubectl rollout status "deployment/${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" --timeout=240s; then
-    dump_gw_diag
-    fail "gateway ${GW_NAME} Deployment did not become Ready"
-  fi
-  if ! kubectl wait gateway/"${GW_NAME}" -n "${ISTIO_NAMESPACE}" --for=condition=Programmed --timeout=120s; then
-    dump_gw_diag
-    fail "gateway ${GW_NAME} not Programmed"
-  fi
+  # Poll Programmed with a big budget instead of a fixed wait. istiod rolls once
+  # shortly after install and churns the managed gateway Deployment; a fixed
+  # `kubectl wait` expires mid-churn. Programmed flips True once istiod settles
+  # and a gateway pod is a ready endpoint — wait that out.
+  local prog=""
+  for i in $(seq 1 60); do
+    prog=$(kubectl get gateway "${GW_NAME}" -n "${ISTIO_NAMESPACE}" \
+      -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}' 2>/dev/null)
+    [ "${prog}" = "True" ] && { echo "OK: gateway Programmed"; return 0; }
+    echo "Waiting for gateway Programmed (attempt ${i}/60, status=${prog:-<none>})..."
+    sleep 6
+  done
+  dump_gw_diag
+  fail "gateway ${GW_NAME} not Programmed (last status=${prog:-<none>})"
 }
 
 recreate_gateway() {
