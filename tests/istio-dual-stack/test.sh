@@ -52,27 +52,13 @@ cleanup() {
 trap cleanup EXIT
 
 # =========================== gateway helpers ===============================
+# Printed only on failure.
 dump_gw_diag() {
   echo "===== gateway diagnostics ====="
   kubectl get gateway "${GW_NAME}" -n "${ISTIO_NAMESPACE}" -o yaml || true
   kubectl get deploy,po,svc,endpointslice -n "${ISTIO_NAMESPACE}" \
     -l "gateway.networking.k8s.io/gateway-name=${GW_NAME}" -o wide || true
-  kubectl describe pod -n "${ISTIO_NAMESPACE}" \
-    -l "gateway.networking.k8s.io/gateway-name=${GW_NAME}" || true
-  echo "----- gateway pod Ready condition -----"
-  kubectl get pods -n "${ISTIO_NAMESPACE}" \
-    -l "gateway.networking.k8s.io/gateway-name=${GW_NAME}" \
-    -o jsonpath='{range .items[*]}{.metadata.name}{"  ready="}{.status.containerStatuses[0].ready}{"  restarts="}{.status.containerStatuses[0].restartCount}{"  phase="}{.status.phase}{"\n"}{end}' || true
-  echo "----- istiod churn (why 2 replicasets?) -----"
-  kubectl get pods -n "${ISTIO_NAMESPACE}" -l app=istiod -o wide || true
-  kubectl get rs -n "${ISTIO_NAMESPACE}" -l app=istiod \
-    -o custom-columns=NAME:.metadata.name,DESIRED:.spec.replicas,READY:.status.readyReplicas,REVISION:'.metadata.annotations.deployment\.kubernetes\.io/revision' || true
-  kubectl rollout history deployment/istiod -n "${ISTIO_NAMESPACE}" || true
-  kubectl get deploy istiod -n "${ISTIO_NAMESPACE}" \
-    -o jsonpath='gen={.metadata.generation}{"\n"}creationTs={.metadata.creationTimestamp}{"\n"}' || true
-  kubectl describe pods -n "${ISTIO_NAMESPACE}" -l app=istiod \
-    | grep -iE 'restart count|last state|reason:|exit code|oom|killing|unhealthy|probe' || true
-  kubectl get events -n "${ISTIO_NAMESPACE}" --sort-by=.lastTimestamp 2>/dev/null | tail -30 || true
+  kubectl get events -n "${ISTIO_NAMESPACE}" --sort-by=.lastTimestamp 2>/dev/null | tail -20 || true
   echo "===== end diagnostics ====="
 }
 
@@ -204,39 +190,6 @@ if [ "${HAS_V4}" != "true" ] || [ "${HAS_V6}" != "true" ]; then
 fi
 echo "OK: dual-stack cluster (node podCIDRs: ${NODE_CIDRS})"
 
-# Ensure istiod is fully up AND stable before creating Gateways. A ready istiod
-# can still be mid-roll (pending template revision) OR its pod can restart
-# (OOM/liveness on a tight runner); creating a Gateway against a churning istiod
-# leaves the managed Deployment flapping (AddressNotAssigned / no endpoints).
-# Require: rollout done (gen==observedGeneration) AND the SAME istiod pod Ready
-# with an unchanging restart count — held stable across consecutive checks.
-wait_istiod_settled() {
-  local stable=0 i gen obs pod rc ready prev_pod="" prev_rc=""
-  for i in $(seq 1 60); do
-    kubectl rollout status deployment/istiod -n "${ISTIO_NAMESPACE}" --timeout=180s >/dev/null 2>&1 || true
-    gen=$(kubectl get deploy istiod -n "${ISTIO_NAMESPACE}" -o jsonpath='{.metadata.generation}')
-    obs=$(kubectl get deploy istiod -n "${ISTIO_NAMESPACE}" -o jsonpath='{.status.observedGeneration}')
-    pod=$(kubectl get pods -n "${ISTIO_NAMESPACE}" -l app=istiod \
-      -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-    rc=$(kubectl get pods -n "${ISTIO_NAMESPACE}" -l app=istiod \
-      -o jsonpath='{.items[0].status.containerStatuses[0].restartCount}' 2>/dev/null)
-    ready=$(kubectl get pods -n "${ISTIO_NAMESPACE}" -l app=istiod \
-      -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
-    if [ -n "${gen}" ] && [ "${gen}" = "${obs}" ] && [ "${ready}" = "true" ] \
-       && [ "${pod}" = "${prev_pod}" ] && [ "${rc}" = "${prev_rc}" ]; then
-      stable=$((stable + 1))
-      [ "${stable}" -ge 3 ] && { echo "OK: istiod settled (gen=${gen} pod=${pod} restarts=${rc})"; return 0; }
-    else
-      stable=0
-    fi
-    prev_pod="${pod}"
-    prev_rc="${rc}"
-    sleep 5
-  done
-  fail "istiod did not settle (gen=${gen} obs=${obs} pod=${pod} ready=${ready} restarts=${rc})"
-}
-wait_istiod_settled
-
 # ===========================================================================
 # 1. Deploy gateway (north-south) + ambient (east-west) workloads
 # ===========================================================================
@@ -317,7 +270,6 @@ if ! is_dual_capable_dns_family "${DLF}"; then
   GW_POD=$(gw_pod)
   DLF=$(gw_dns_lookup_family "${GW_POD}")
 fi
-gw_pod_ips "${GW_POD}"
 
 # ===========================================================================
 # 4. Verify IPv6 now works on both data planes (IPv4 still works)
