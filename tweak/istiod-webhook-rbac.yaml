@@ -1,0 +1,57 @@
+{{- if or (eq .Values.global.resourceScope "all") (eq .Values.global.resourceScope "cluster") }}
+{{- if or (not .Values.istiodRemote.enabled) (and .Values.istiodRemote.enabled (or .Values.global.configCluster .Values.istiodRemote.enabledLocalInjectorIstiod)) }}
+{{- $rev := "" }}{{- if not (eq .Values.revision "") }}{{- $rev = printf "-%s" .Values.revision }}{{- end }}
+{{- $ns := .Release.Namespace }}
+{{- $mwcNames := list (printf "istio-sidecar-injector%s-%s" $rev $ns) }}
+{{- range $tag := (default (list) .Values.revisionTags) }}{{- $mwcNames = append $mwcNames (printf "istio-revision-tag-%s-%s" $tag $ns) }}{{- end }}
+{{- $vwcNames := list "istiod-default-validator" (printf "istio-validator%s-%s" $rev .Values.global.istioNamespace) }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: istiod-webhook-rbac{{ $rev }}-{{ $ns }}
+  labels:
+    app: istiod
+    release: {{ .Release.Name }}
+    app.kubernetes.io/name: "istiod"
+    {{- include "istio.labels" . | nindent 4 }}
+rules:
+  # collection verbs cannot be scoped by resourceNames -> stay cluster-wide
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["mutatingwebhookconfigurations", "validatingwebhookconfigurations"]
+    verbs: ["list", "watch"]
+  # istiod patches the caBundle on its own mutating webhooks (injector + revision tags)
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["mutatingwebhookconfigurations"]
+    resourceNames:
+{{- range $mwcNames }}
+      - {{ . }}
+{{- end }}
+    verbs: ["get", "update", "patch"]
+  # istiod patches the caBundle on its own validating webhooks (no patch needed)
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["validatingwebhookconfigurations"]
+    resourceNames:
+{{- range $vwcNames }}
+      - {{ . }}
+{{- end }}
+    verbs: ["get", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: istiod-webhook-rbac{{ $rev }}-{{ $ns }}
+  labels:
+    app: istiod
+    release: {{ .Release.Name }}
+    app.kubernetes.io/name: "istiod"
+    {{- include "istio.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: istiod-webhook-rbac{{ $rev }}-{{ $ns }}
+subjects:
+  - kind: ServiceAccount
+    name: istiod{{ $rev }}
+    namespace: {{ .Values.global.istioNamespace }}
+{{- end }}
+{{- end }}

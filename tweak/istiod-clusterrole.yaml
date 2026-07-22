@@ -1,0 +1,26 @@
+{{- $out := list -}}
+{{- $dropped := 0 -}}
+{{- range $raw := (include "qubership.istiod-clusterrole-upstream" . | splitList "\n---\n") -}}
+  {{- $doc := $raw | fromYaml -}}
+  {{- if $doc.kind -}}
+    {{- if hasPrefix "istiod-clusterrole" (dig "metadata" "name" "" $doc) -}}
+      {{- $keep := list -}}
+      {{- range $r := $doc.rules -}}
+        {{- if or (has "mutatingwebhookconfigurations" $r.resources) (has "validatingwebhookconfigurations" $r.resources) -}}
+          {{- $dropped = add1 $dropped -}}
+        {{- else -}}
+          {{- $keep = append $keep $r -}}
+        {{- end -}}
+      {{- end -}}
+      {{- $_ := set $doc "rules" $keep -}}
+    {{- end -}}
+    {{- $out = append $out (toYaml $doc) -}}
+  {{- end -}}
+{{- end -}}
+{{- if and $out (lt $dropped 2) -}}
+  {{- fail (printf "qubership istiod-clusterrole: expected to drop 2 webhook rules, dropped=%d — upstream ClusterRole shape changed, re-review RBAC" $dropped) -}}
+{{- end -}}
+{{- range $d := $out }}
+---
+{{ $d }}
+{{- end }}
