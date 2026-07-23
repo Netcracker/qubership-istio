@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -eux
 
-# Verifies the qubership RBAC narrowing applied by tweak/ on a live cluster:
+# Verifies the qubership RBAC narrowing applied by tweak/istiod-rbac/ on a live cluster:
 #   - webhook write access is scoped to istiod's own webhooks via resourceNames
-#     (tweak/istiod-clusterrole.yaml); list/watch stay cluster-wide;
+#     (tweak/istiod-rbac/istiod-clusterrole.yaml); list/watch stay cluster-wide;
 # Assert effective permissions through SubjectAccessReview, not rendered YAML.
 
 # istiod ServiceAccount name; "-<revision>" suffix is omitted in this distribution
