@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Injects the image-override template into every subchart package.
+# Injects the custom-registry template into every subchart package.
 # zzzz prefix ensures the tweak template is loaded last, even after
 # istio zzz_profile.yaml is processed.
 set -euo pipefail
