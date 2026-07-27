@@ -1,14 +1,15 @@
 {{- if or (eq .Values.global.resourceScope "all") (eq .Values.global.resourceScope "cluster") }}
 {{- if or (not .Values.istiodRemote.enabled) (and .Values.istiodRemote.enabled (or .Values.global.configCluster .Values.istiodRemote.enabledLocalInjectorIstiod)) }}
 {{- $rev := "" }}{{- if not (eq .Values.revision "") }}{{- $rev = printf "-%s" .Values.revision }}{{- end }}
-{{- $ns := .Release.Namespace }}
-{{- $mwcNames := list (printf "istio-sidecar-injector%s-%s" $rev $ns) }}
-{{- range $tag := (default (list) .Values.revisionTags) }}{{- $mwcNames = append $mwcNames (printf "istio-revision-tag-%s-%s" $tag $ns) }}{{- end }}
+{{- /* istio omits the namespace suffix from webhook names when installed in istio-system */}}
+{{- $ns := "" }}{{- if not (eq .Release.Namespace "istio-system") }}{{- $ns = printf "-%s" .Release.Namespace }}{{- end }}
+{{- $mwcNames := list (printf "istio-sidecar-injector%s%s" $rev $ns) }}
+{{- range $tag := (default (list) .Values.revisionTags) }}{{- $mwcNames = append $mwcNames (printf "istio-revision-tag-%s%s" $tag $ns) }}{{- end }}
 {{- $vwcNames := list "istiod-default-validator" (printf "istio-validator%s-%s" $rev .Values.global.istioNamespace) }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: istiod-webhook-rbac{{ $rev }}-{{ $ns }}
+  name: istiod-webhook-rbac{{ $rev }}{{ $ns }}
   labels:
     app: istiod
     release: {{ .Release.Name }}
@@ -39,7 +40,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: istiod-webhook-rbac{{ $rev }}-{{ $ns }}
+  name: istiod-webhook-rbac{{ $rev }}{{ $ns }}
   labels:
     app: istiod
     release: {{ .Release.Name }}
@@ -48,7 +49,7 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: istiod-webhook-rbac{{ $rev }}-{{ $ns }}
+  name: istiod-webhook-rbac{{ $rev }}{{ $ns }}
 subjects:
   - kind: ServiceAccount
     name: istiod{{ $rev }}

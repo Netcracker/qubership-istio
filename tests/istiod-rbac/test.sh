@@ -35,7 +35,10 @@ assert_cannot() {
 # 1. Webhooks: write verbs only on istiod's own webhook configs (resourceNames),
 #    collection verbs (list/watch) remain cluster-wide.
 # ---------------------------------------------------------------------------
-INJECTOR="istio-sidecar-injector-${ISTIO_NAMESPACE}"
+# istio omits the namespace suffix from the injector webhook name in istio-system;
+# the validator always carries it.
+INJECTOR="istio-sidecar-injector"
+[ "${ISTIO_NAMESPACE}" = "istio-system" ] || INJECTOR="istio-sidecar-injector-${ISTIO_NAMESPACE}"
 VALIDATOR="istio-validator-${ISTIO_NAMESPACE}"
 
 assert_can    update "mutatingwebhookconfigurations/${INJECTOR}"
