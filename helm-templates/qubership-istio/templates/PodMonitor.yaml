@@ -12,4 +12,17 @@ spec:
   selector:
     matchLabels:
       app: ztunnel
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: istio-cni-node-monitor
+spec:
+  podMetricsEndpoints:
+    - interval: {{ .Values.monitoring.scrapeInterval }}
+      path: /metrics
+      port: metrics
+  selector:
+    matchLabels:
+      k8s-app: istio-cni-node
   {{- end }}
