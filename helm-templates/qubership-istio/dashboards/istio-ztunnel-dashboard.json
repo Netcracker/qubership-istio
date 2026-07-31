@@ -137,7 +137,6 @@
             ]
           }
         ]
-
       },
       "gridPos": {
         "h": 8,
@@ -219,7 +218,6 @@
             ]
           }
         ]
-
       },
       "gridPos": {
         "h": 8,
@@ -670,7 +668,8 @@
         }
       ],
       "title": "XDS Pushes",
-      "type": "timeseries"
+      "type": "timeseries",
+      "description": "Rate of XDS messages exchanged with the control plane, by message type"
     },
     {
       "datasource": {
@@ -745,5 +744,8 @@
   "timezone": "utc",
   "title": "Istio Ztunnel Dashboard",
   "uid": "12c58766acc81a1c835dd5059eaf2741",
-  "gnetId": 21306
+  "gnetId": 21306,
+  "tags": [
+    "istio"
+  ]
 }

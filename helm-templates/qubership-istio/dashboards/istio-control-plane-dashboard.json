@@ -325,7 +325,6 @@
             ]
           }
         ]
-
       },
       "gridPos": {
         "h": 10,
@@ -606,7 +605,8 @@
         }
       ],
       "title": "XDS Pushes",
-      "type": "timeseries"
+      "type": "timeseries",
+      "description": "Rate of configuration pushes sent by Pilot to the data plane, by resource type"
     },
     {
       "datasource": {
@@ -1006,5 +1006,8 @@
   "timezone": "utc",
   "title": "Istio Control Plane Dashboard",
   "uid": "1813f692a8e4ac77155348d4c7d2fba8",
-  "gnetId": 7645
+  "gnetId": 7645,
+  "tags": [
+    "istio"
+  ]
 }
