@@ -2,8 +2,11 @@ apiVersion: v2
 name: qubership-istio
 description: A Helm chart that assembles all Istio component charts (base, cni, istiod, ztunnel)
 type: application
-# The effective version will be computed during Helm generation
+# Placeholders. The build stamps `version` with the qubership-istio release
+# version (or `0.0.0-<branch>` for a dev build) and `appVersion` with the
+# bundled istio version. See .github/workflows/docker-publish.yml.
 version: 0.0.1
+appVersion: "1.30.2"
 dependencies:
   - name: base
     version: "1.30.2"

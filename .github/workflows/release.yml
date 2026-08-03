@@ -1,0 +1,221 @@
+---
+# Cuts a qubership-istio release: resolve the version, tag the dispatched
+# commit, build and publish the transfer image, then publish the GitHub release
+# page with notes drafted from the merged pull requests.
+#
+# qubership-istio carries its own SemVer, separate from the istio version it
+# bundles. The bump rule is:
+#
+#   istio major bump  -> qubership major bump
+#   istio minor bump  -> qubership minor bump
+#   istio patch bump  -> qubership patch bump
+#   qubership-only change -> patch, or minor for a new capability
+#
+# The `auto` version type reads that rule off the istio chart dependency in
+# helm-templates/qubership-istio/Chart.yaml, comparing the dispatched commit
+# against the previous release tag.
+#
+# Release tags carry no `v` prefix, matching the existing 1.0.0 and 1.0.1 tags.
+# Every tag-name here is therefore passed explicitly, because the hub actions
+# default to `v<version>`.
+
+name: Release
+run-name: "Release (${{ inputs.version-type }})${{ inputs.dry-run && ' - dry run' || '' }} by ${{ github.actor }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      version-type:
+        description: "Which part of the version to bump. 'auto' derives it from the istio version change since the last release."
+        type: choice
+        options:
+          - auto
+          - patch
+          - minor
+          - major
+          - explicit
+        default: auto
+        required: true
+      version:
+        description: "Explicit release version, for example 1.1.0. Read only when version-type is 'explicit'."
+        type: string
+        required: false
+        default: ""
+      dry-run:
+        description: "Resolve and build without pushing the tag, the image, or the release page."
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  resolve-version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      istio-version: ${{ steps.resolve.outputs.istio-version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Resolve release version
+        id: resolve
+        env:
+          VERSION_TYPE: ${{ inputs.version-type }}
+          EXPLICIT_VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          CHART=helm-templates/qubership-istio/Chart.yaml
+          ISTIO_VERSION="$(yq e '.dependencies[0].version' "${CHART}")"
+          echo "istio-version=${ISTIO_VERSION}" >> "$GITHUB_OUTPUT"
+
+          LATEST_TAG="$(gh api "repos/${REPOSITORY}/releases/latest" --jq '.tag_name' 2>/dev/null || true)"
+          if [ -z "${LATEST_TAG}" ] || [ "${LATEST_TAG}" = "null" ]; then
+            echo "::notice::No previous release found. Starting from 0.0.0."
+            LATEST_TAG=""
+            LATEST_VERSION="0.0.0"
+          else
+            LATEST_VERSION="${LATEST_TAG#v}"
+          fi
+
+          if ! [[ "${LATEST_VERSION}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "::error::Latest release tag '${LATEST_TAG}' is not a SemVer version. Use version-type 'explicit'."
+            exit 1
+          fi
+          MAJOR="${BASH_REMATCH[1]}"; MINOR="${BASH_REMATCH[2]}"; PATCH="${BASH_REMATCH[3]}"
+
+          BUMP="${VERSION_TYPE}"
+
+          if [ "${BUMP}" = "auto" ]; then
+            # Derive the bump from the istio chart dependency at the previous
+            # release tag. No previous tag, or an unreadable Chart.yaml there,
+            # falls back to patch.
+            PREV_ISTIO=""
+            if [ -n "${LATEST_TAG}" ]; then
+              PREV_ISTIO="$(git show "${LATEST_TAG}:${CHART}" 2>/dev/null | yq e '.dependencies[0].version' - 2>/dev/null || true)"
+            fi
+
+            if [ -z "${PREV_ISTIO}" ] || [ "${PREV_ISTIO}" = "null" ] || [ "${PREV_ISTIO}" = "${ISTIO_VERSION}" ]; then
+              BUMP="patch"
+              echo "::notice::Istio stayed at ${ISTIO_VERSION}. Bumping the patch part."
+            else
+              IFS='.' read -r P_MAJ P_MIN _ <<< "${PREV_ISTIO}"
+              IFS='.' read -r C_MAJ C_MIN _ <<< "${ISTIO_VERSION}"
+              if [ "${C_MAJ}" != "${P_MAJ}" ]; then
+                BUMP="major"
+              elif [ "${C_MIN}" != "${P_MIN}" ]; then
+                BUMP="minor"
+              else
+                BUMP="patch"
+              fi
+              echo "::notice::Istio moved ${PREV_ISTIO} -> ${ISTIO_VERSION}. Bumping the ${BUMP} part."
+            fi
+          fi
+
+          case "${BUMP}" in
+            explicit)
+              if [ -z "${EXPLICIT_VERSION}" ]; then
+                echo "::error::version-type is 'explicit' but no version was given."
+                exit 1
+              fi
+              NEW_VERSION="${EXPLICIT_VERSION#v}"
+              ;;
+            major) NEW_VERSION="$((MAJOR + 1)).0.0" ;;
+            minor) NEW_VERSION="${MAJOR}.$((MINOR + 1)).0" ;;
+            patch) NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
+            *)
+              echo "::error::Unknown version type '${BUMP}'."
+              exit 1
+              ;;
+          esac
+
+          if ! [[ "${NEW_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Resolved version '${NEW_VERSION}' is not a SemVer version."
+            exit 1
+          fi
+
+          echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          {
+            echo "**Previous release**: ${LATEST_TAG:-none}"
+            echo "**Istio version**: ${ISTIO_VERSION}"
+            echo "**Bump**: ${BUMP}"
+            echo "**New version**: ${NEW_VERSION}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check that the tag is free
+        uses: netcracker/qubership-workflow-hub/actions/tag-action@b6bee6f61fdc8b367777c1173fc852a58878a6a7 # v2.5.0
+        with:
+          ref: ${{ github.sha }}
+          tag-name: ${{ steps.resolve.outputs.version }}
+          create-tag: false
+          check-tag: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  create-tag:
+    needs: [resolve-version]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create tag
+        uses: netcracker/qubership-workflow-hub/actions/tag-action@b6bee6f61fdc8b367777c1173fc852a58878a6a7 # v2.5.0
+        with:
+          # Tag the exact commit the run started at, so the tag and the
+          # published image are built from the same tree.
+          ref: ${{ github.sha }}
+          tag-name: ${{ needs.resolve-version.outputs.version }}
+          tag-message: "qubership-istio ${{ needs.resolve-version.outputs.version }} (istio ${{ needs.resolve-version.outputs.istio-version }})"
+          check-tag: true
+          dry-run: ${{ inputs.dry-run }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-and-publish:
+    needs: [resolve-version, create-tag]
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    uses: ./.github/workflows/docker-publish.yml
+    with:
+      version: ${{ needs.resolve-version.outputs.version }}
+      dry-run: ${{ inputs.dry-run }}
+
+  # A failed build leaves no release behind, so drop the tag it was cut for.
+  rollback-tag:
+    needs: [resolve-version, create-tag, build-and-publish]
+    if: ${{ failure() && needs.create-tag.result == 'success' && !inputs.dry-run }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Delete tag
+        uses: netcracker/qubership-workflow-hub/actions/tag-action@b6bee6f61fdc8b367777c1173fc852a58878a6a7 # v2.5.0
+        with:
+          ref: ${{ github.sha }}
+          tag-name: ${{ needs.resolve-version.outputs.version }}
+          delete-tag: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  github-release:
+    needs: [resolve-version, build-and-publish]
+    if: ${{ !inputs.dry-run }}
+    permissions:
+      contents: write
+    uses: netcracker/qubership-workflow-hub/.github/workflows/release-drafter.yml@b6bee6f61fdc8b367777c1173fc852a58878a6a7 # v2.5.0
+    with:
+      version: ${{ needs.resolve-version.outputs.version }}
+      tag: ${{ needs.resolve-version.outputs.version }}
+      publish: "true"
+      config-name: release-drafter-config.yml

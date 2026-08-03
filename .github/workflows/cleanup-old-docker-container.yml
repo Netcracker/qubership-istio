@@ -9,46 +9,66 @@ on:
         threshold-days:
           description: "Number of days to keep container versions"
           required: false
-          default: "7"
+          default: "8"
         included-tags:
           description: "Tags to include for deletion"
           required: false
           default: "*"
+        # Keeps every release tag the build publishes: `latest`, the full
+        # version `1.0.2`, the istio alias `1.0.2-istio1.30.2` (both matched by
+        # the built-in `semver` pattern), the major.minor alias `1.0`, and the
+        # legacy istio-prefixed tags `1.30-latest` and `1.30-1.0.1`.
+        # Everything else is a dev branch tag and is safe to expire.
         excluded-tags:
           description: "Tags to exclude from deletion"
           required: false
-          default: "latest,*-latest,*.*-*.*"
+          default: "latest,semver,*.*,*-latest"
         dry-run:
           description: "Enable dry-run mode"
           required: false
-          default: "false"
-          type: "boolean"
+          default: false
+          type: boolean
         debug:
           description: "Enable debug mode"
           required: false
-          default: "false"
-          type: "boolean"
+          default: false
+          type: boolean
+
+permissions:
+  contents: read
+
 jobs:
     cleanup:
       runs-on: ubuntu-latest
+      permissions:
+        contents: read
+        packages: write
+      env:
+        THRESHOLD_DAYS: ${{ github.event.inputs.threshold-days || '8' }}
+        INCLUDED_TAGS: ${{ github.event.inputs.included-tags || '*' }}
+        EXCLUDED_TAGS: ${{ github.event.inputs.excluded-tags || 'latest,semver,*.*,*-latest' }}
+        DRY_RUN: ${{ github.event.inputs.dry-run || 'false' }}
+        DEBUG: ${{ github.event.inputs.debug || 'false' }}
 
       steps:
         - name: "Summary"
           run: |
-            echo "**Event**: ${{ github.event_name }}"
-            echo "**Actor**: ${{ github.actor }}"
-            echo "**Threshold days**: ${{ github.event.inputs.threshold-days || 8 }}"
-            echo "**Included tags**: ${{ github.event.inputs.included-tags || '*' }}"
-            echo "**Excluded tags**: ${{ github.event.inputs.excluded-tags || 'latest,*-latest,*.*-*.*' }}"
-            echo "**Dry-run**: ${{ github.event.inputs.dry-run || 'false' }}"
-            echo "**Debug**: ${{ github.event.inputs.debug || 'false' }}"
+            {
+              echo "**Event**: ${{ github.event_name }}"
+              echo "**Actor**: ${{ github.actor }}"
+              echo "**Threshold days**: ${THRESHOLD_DAYS}"
+              echo "**Included tags**: ${INCLUDED_TAGS}"
+              echo "**Excluded tags**: ${EXCLUDED_TAGS}"
+              echo "**Dry-run**: ${DRY_RUN}"
+              echo "**Debug**: ${DEBUG}"
+            } >> "$GITHUB_STEP_SUMMARY"
         - name: Run Container Package Cleanup Action
-          uses: netcracker/qubership-workflow-hub/actions/container-package-cleanup@v2.0.4
+          uses: netcracker/qubership-workflow-hub/actions/container-package-cleanup@b6bee6f61fdc8b367777c1173fc852a58878a6a7 # v2.5.0
           with:
-            threshold-days: ${{ github.event.inputs.threshold-days || 8 }}
-            included-tags: ${{ github.event.inputs.included-tags || '*' }}
-            excluded-tags: ${{ github.event.inputs.excluded-tags || 'latest,*-latest,*.*-*.*' }}
-            dry-run: ${{ github.event.inputs.dry-run || 'false' }}
-            debug: ${{ github.event.inputs.debug || 'false' }}
+            threshold-days: ${{ env.THRESHOLD_DAYS }}
+            included-tags: ${{ env.INCLUDED_TAGS }}
+            excluded-tags: ${{ env.EXCLUDED_TAGS }}
+            dry-run: ${{ env.DRY_RUN }}
+            debug: ${{ env.DEBUG }}
           env:
             PACKAGE_TOKEN: ${{ secrets.GH_RWD_PACKAGE_TOKEN }}

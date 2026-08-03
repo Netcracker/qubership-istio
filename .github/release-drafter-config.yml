@@ -21,6 +21,9 @@ categories:
   - title: '📝 Documentation'
     labels:
       - documentation
+  - title: '📦 Dependencies'
+    labels:
+      - dependencies
 
 change-template: '- $TITLE (#$NUMBER) by @$AUTHOR'
 no-changes-template: 'No significant changes'

@@ -1,11 +1,35 @@
 name: Build Artifacts
+
+# Triggers, and why each one exists:
+#
+#   push (any branch)  : builds and publishes a dev image tagged after the
+#                        branch. Covers same-repo pull requests too, because a
+#                        PR branch lives in this repository.
+#   pull_request       : covers fork pull requests only (see the `if` on
+#                        helm-charts-build). A fork gets no push trigger, and
+#                        its GITHUB_TOKEN cannot write packages, so the build
+#                        runs in dry-run mode.
+#   workflow_call      : the release workflow drives the same pipeline with an
+#                        explicit qubership-istio version.
+#   workflow_dispatch  : manual rebuild of a branch.
 permissions:
   contents: read
   packages: write
   actions: read
 on:
-  release:
-    types: [created]
+  workflow_call:
+    inputs:
+      version:
+        description: "qubership-istio release version, for example 1.1.0. Empty for dev builds."
+        required: false
+        type: string
+        default: ""
+      dry-run:
+        description: "Build without pushing the image."
+        required: false
+        type: boolean
+        default: false
+  workflow_dispatch:
   push:
     branches:
       - '**'
@@ -28,33 +52,83 @@ on:
       - 'README.md'
       - 'SECURITY.md'
 
-env:
-  TAG_NAME: ${{ github.event.release.tag_name || github.ref }}
-
 concurrency:
-  # On main/release, we don't want any jobs cancelled so the sha is used to name the group
-  # On PR branches, we cancel the job if new commits are pushed
+  # On main, nothing is cancelled, so the sha names the group.
+  # On other branches, a new push cancels the run in flight.
+  # The event name is part of the group so that a release run and the main CI
+  # build at the same commit do not cancel each other.
   # More info: https://stackoverflow.com/a/68422069/253468
-  group: ${{ github.ref == 'refs/heads/main' && format('ci-main-{0}', github.sha) || format('ci-main-{0}', github.ref) }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
 
   helm-charts-build:
+    # A same-repo pull request is already built by the push trigger on its
+    # branch. Only fork pull requests need this event, so skip the duplicate.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     outputs:
-      istio-minor-version: ${{ steps.version.outputs.istio-minor-version }}
       istio-version: ${{ steps.version.outputs.istio-version }}
+      chart-version: ${{ steps.version.outputs.chart-version }}
+      image-tags: ${{ steps.version.outputs.image-tags }}
+      dry-run: ${{ steps.version.outputs.dry-run }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Read Istio version from Chart.yaml
+      - name: Resolve chart version and image tags
         id: version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          # A fork cannot write packages, and renovate images are not wanted in
+          # the registry. Both are built, neither is published.
+          FORCE_DRY_RUN: ${{ inputs.dry-run || (github.event_name == 'pull_request') || (github.actor == 'renovate[bot]') }}
+          REF_NAME: ${{ github.head_ref || github.ref_name }}
         run: |
+          set -euo pipefail
+
           ISTIO_VERSION="$(yq e '.dependencies[0].version' helm-templates/qubership-istio/Chart.yaml)"
-          echo "istio-version=${ISTIO_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "istio-minor-version=${ISTIO_VERSION%.*}" >> "$GITHUB_OUTPUT"
+
+          if [ -n "${RELEASE_VERSION}" ]; then
+            # Release build. The image carries the qubership-istio version as
+            # the primary tag; the istio alias keeps the bundled istio version
+            # visible in the registry listing.
+            CHART_VERSION="${RELEASE_VERSION}"
+            IMAGE_TAGS="${RELEASE_VERSION},${RELEASE_VERSION%.*},latest,${RELEASE_VERSION}-istio${ISTIO_VERSION}"
+          else
+            # Dev build. Helm requires a SemVer chart version, so the branch
+            # name goes into a prerelease segment with unsupported characters
+            # collapsed to hyphens.
+            SLUG="$(echo "${REF_NAME}" | tr -c 'a-zA-Z0-9' '-' | sed 's/-\{2,\}/-/g; s/^-//; s/-$//')"
+            SLUG="${SLUG:-build}"
+            CHART_VERSION="0.0.0-${SLUG}"
+            IMAGE_TAGS="${SLUG}"
+          fi
+
+          {
+            echo "istio-version=${ISTIO_VERSION}"
+            echo "chart-version=${CHART_VERSION}"
+            echo "image-tags=${IMAGE_TAGS}"
+            echo "dry-run=${FORCE_DRY_RUN}"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "**Chart version**: ${CHART_VERSION}"
+            echo "**Istio version**: ${ISTIO_VERSION}"
+            echo "**Image tags**: ${IMAGE_TAGS}"
+            echo "**Dry run**: ${FORCE_DRY_RUN}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Stamp Chart.yaml version and appVersion
+        env:
+          CHART_VERSION: ${{ steps.version.outputs.chart-version }}
+          ISTIO_VERSION: ${{ steps.version.outputs.istio-version }}
+        run: |
+          yq e -i '.version = strenv(CHART_VERSION) | .appVersion = strenv(ISTIO_VERSION)' \
+            helm-templates/qubership-istio/Chart.yaml
 
       - name: Install Helm 4
         uses: azure/setup-helm@v5
@@ -102,14 +176,12 @@ jobs:
     needs: [ helm-charts-build, integration-test ]
     runs-on: ubuntu-latest
     steps:
-      - name: Prepare Tag
-        run: echo "TAG_NAME=$(echo ${TAG_NAME} | sed 's@refs/tags/@@;s@refs/heads/@@;s@/@_@g')" >> $GITHUB_ENV
       - name: Build and push
-        uses: netcracker/qubership-workflow-hub/actions/docker-action@main
+        uses: netcracker/qubership-workflow-hub/actions/docker-action@b6bee6f61fdc8b367777c1173fc852a58878a6a7 # v2.5.0
         with:
           component: |
             [{
-              "name": "qubership-istio-transfer", 
+              "name": "qubership-istio-transfer",
               "dockerfile": "./Dockerfile",
               "build_context": "."
             }]
@@ -119,9 +191,8 @@ jobs:
           download-artifact-path: ./helm-templates/qubership-istio/
           download-artifact-merge-multiple: true
           platforms: linux/amd64,linux/arm64
-          tags: "${{ needs.helm-charts-build.outputs.istio-minor-version }}-${{ env.TAG_NAME }}${{ github.ref == 'refs/heads/main' && format(',{0}-latest,{1}', needs.helm-charts-build.outputs.istio-minor-version, needs.helm-charts-build.outputs.istio-version) || '' }}"
+          tags: ${{ needs.helm-charts-build.outputs.image-tags }}
           registry: ghcr.io
-          dry-run: ${{ github.event.pull_request.user.login == 'renovate[bot]' }}
+          dry-run: ${{ needs.helm-charts-build.outputs.dry-run }}
         env:
            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
