@@ -1,6 +1,12 @@
 name: Integration Test
 on:
-  workflow_call: {}
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Git reference (branch, tag, or SHA) to checkout and test'
+        required: false
+        type: string
+        default: ""
 
 jobs:
   # Build and lint the chart once. The matrix legs below differ only in cluster
@@ -11,6 +17,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
 
       # The chart's Istio subcharts (base, cni, istiod, ztunnel) are not
       # committed; they are vendored into charts/ by the helm-charts-build job
@@ -106,6 +114,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
 
       # The chart (with vendored charts/) was built and linted once by the
       # build-and-lint job; restore it instead of rebuilding the transfer image.

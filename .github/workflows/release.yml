@@ -1,7 +1,15 @@
 ---
-# Cuts a qubership-istio release: resolve the version, tag the dispatched
-# commit, build and publish the transfer image, then publish the GitHub release
-# page with notes drafted from the merged pull requests.
+# Cuts a qubership-istio release: resolve the version, tag the head of the
+# branch being released, build and publish the transfer image, then publish the
+# GitHub release page with notes drafted from the merged pull requests.
+#
+# The `branch` input picks what gets released, independently of the branch this
+# workflow is dispatched on. Its head commit is resolved once and every later
+# job pins that SHA.
+#
+# Only the default branch opens a new major or minor line. Any other branch is
+# treated as a maintenance line: it may move the patch part alone, and a release
+# that would move more than that fails rather than being downgraded.
 #
 # qubership-istio carries its own SemVer, separate from the istio version it
 # bundles. The bump rule is:
@@ -9,24 +17,31 @@
 #   istio major bump  -> qubership major bump
 #   istio minor bump  -> qubership minor bump
 #   istio patch bump  -> qubership patch bump
-#   qubership-only change -> patch, or minor for a new capability
+#   feat! or BREAKING CHANGE -> major
+#   feat                     -> minor
+#   anything else            -> patch
 #
-# The `auto` version type reads that rule off the istio chart dependency in
-# helm-templates/qubership-istio/Chart.yaml, comparing the dispatched commit
-# against the previous release tag.
+# The `auto` version type reads both signals since the previous tag — the istio
+# chart dependency in helm-templates/qubership-istio/Chart.yaml, and the
+# conventional-commit prefixes of the commits — and takes the stronger one.
 #
 # Release tags carry no `v` prefix, matching the existing 1.0.0 and 1.0.1 tags.
 # Every tag-name here is therefore passed explicitly, because the hub actions
 # default to `v<version>`.
 
 name: Release
-run-name: "Release (${{ inputs.version-type }})${{ inputs.dry-run && ' - dry run' || '' }} by ${{ github.actor }}"
+run-name: "Release ${{ inputs.branch }} (${{ inputs.version-type }})${{ inputs.dry-run && ' - dry run' || '' }}${{ inputs.skip-tests && ' - no tests' || '' }} by ${{ github.actor }}"
 
 on:
   workflow_dispatch:
     inputs:
+      branch:
+        description: 'Branch to release from (non-default branches take patch releases only)'
+        type: string
+        default: main
+        required: true
       version-type:
-        description: "Which part of the version to bump. 'auto' derives it from the istio version change since the last release."
+        description: 'Which part of the version to bump (auto reads the istio version and conventional commits)'
         type: choice
         options:
           - auto
@@ -37,12 +52,16 @@ on:
         default: auto
         required: true
       version:
-        description: "Explicit release version, for example 1.1.0. Read only when version-type is 'explicit'."
+        description: 'Release version (e.g., 1.1.0), used when version-type is explicit'
         type: string
         required: false
         default: ""
       dry-run:
-        description: "Resolve and build without pushing the tag, the image, or the release page."
+        description: 'Dry run (no tag, image, or release page)'
+        type: boolean
+        default: false
+      skip-tests:
+        description: 'Skip the integration test matrix (a real release then ships untested)'
         type: boolean
         default: false
 
@@ -57,10 +76,13 @@ jobs:
     outputs:
       version: ${{ steps.resolve.outputs.version }}
       istio-version: ${{ steps.resolve.outputs.istio-version }}
+      sha: ${{ steps.resolve.outputs.sha }}
+      is-default-branch: ${{ steps.resolve.outputs.is-default-branch }}
     steps:
-      - name: Checkout code
+      - name: Checkout the branch being released
         uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.branch }}
           persist-credentials: false
           fetch-depth: 0
 
@@ -69,6 +91,8 @@ jobs:
         env:
           VERSION_TYPE: ${{ inputs.version-type }}
           EXPLICIT_VERSION: ${{ inputs.version }}
+          BRANCH: ${{ inputs.branch }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPOSITORY: ${{ github.repository }}
         run: |
@@ -76,49 +100,140 @@ jobs:
 
           CHART=helm-templates/qubership-istio/Chart.yaml
           ISTIO_VERSION="$(yq e '.dependencies[0].version' "${CHART}")"
-          echo "istio-version=${ISTIO_VERSION}" >> "$GITHUB_OUTPUT"
 
-          LATEST_TAG="$(gh api "repos/${REPOSITORY}/releases/latest" --jq '.tag_name' 2>/dev/null || true)"
-          if [ -z "${LATEST_TAG}" ] || [ "${LATEST_TAG}" = "null" ]; then
-            echo "::notice::No previous release found. Starting from 0.0.0."
-            LATEST_TAG=""
+          # Every downstream job pins this commit rather than re-resolving the
+          # branch, so a push landing mid-run cannot split the tag, the image,
+          # and the release across different trees.
+          HEAD_SHA="$(git rev-parse HEAD)"
+          {
+            echo "istio-version=${ISTIO_VERSION}"
+            echo "sha=${HEAD_SHA}"
+          } >> "$GITHUB_OUTPUT"
+
+          # The baseline is the highest SemVer git tag, not the latest GitHub
+          # release. The two diverge whenever a tag exists without a published
+          # release behind it — a draft, a prerelease, or a run that tagged and
+          # then failed before publishing. Reading releases there would keep
+          # recomputing a version whose tag is already taken, and every later
+          # run would die on the collision check below.
+          # --merged HEAD keeps the baseline on this branch's own release line.
+          # A repo-wide tag list would let a tag cut elsewhere — a newer minor
+          # on main, say — become the baseline for a maintenance branch.
+          LATEST_TAG="$(git tag --list --merged HEAD --sort=-v:refname \
+            | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' \
+            | head -n 1 || true)"
+
+          if [ -z "${LATEST_TAG}" ]; then
+            echo "::notice::No SemVer tag found. Starting from 0.0.0."
             LATEST_VERSION="0.0.0"
           else
             LATEST_VERSION="${LATEST_TAG#v}"
           fi
 
           if ! [[ "${LATEST_VERSION}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-            echo "::error::Latest release tag '${LATEST_TAG}' is not a SemVer version. Use version-type 'explicit'."
+            echo "::error::Latest tag '${LATEST_TAG}' is not a SemVer version. Use version-type 'explicit'."
             exit 1
           fi
           MAJOR="${BASH_REMATCH[1]}"; MINOR="${BASH_REMATCH[2]}"; PATCH="${BASH_REMATCH[3]}"
 
+          # Nothing has landed since the last release, so a new version would
+          # describe the same tree. Releasing anyway is how one commit ends up
+          # carrying two versions, which then makes the baseline on any branch
+          # cut from it ambiguous.
+          if [ -n "${LATEST_TAG}" ]; then
+            COMMITS_SINCE="$(git rev-list --count "${LATEST_TAG}..HEAD")"
+            if [ "${COMMITS_SINCE}" -eq 0 ]; then
+              echo "::error::'${BRANCH}' is already released as ${LATEST_TAG} — no commits have landed since. Merge something first, or release a branch that is ahead."
+              exit 1
+            fi
+            echo "::notice::${COMMITS_SINCE} commit(s) since ${LATEST_TAG}."
+          fi
+
           BUMP="${VERSION_TYPE}"
 
+          rank() {
+            case "$1" in
+              major) echo 3 ;;
+              minor) echo 2 ;;
+              *)     echo 1 ;;
+            esac
+          }
+
           if [ "${BUMP}" = "auto" ]; then
-            # Derive the bump from the istio chart dependency at the previous
-            # release tag. No previous tag, or an unreadable Chart.yaml there,
-            # falls back to patch.
+            # Two independent signals, whichever is stronger wins.
+            #
+            # Signal 1 — the istio chart dependency at the previous tag. No
+            # previous tag, or an unreadable Chart.yaml there, means patch.
             PREV_ISTIO=""
             if [ -n "${LATEST_TAG}" ]; then
               PREV_ISTIO="$(git show "${LATEST_TAG}:${CHART}" 2>/dev/null | yq e '.dependencies[0].version' - 2>/dev/null || true)"
             fi
 
             if [ -z "${PREV_ISTIO}" ] || [ "${PREV_ISTIO}" = "null" ] || [ "${PREV_ISTIO}" = "${ISTIO_VERSION}" ]; then
-              BUMP="patch"
-              echo "::notice::Istio stayed at ${ISTIO_VERSION}. Bumping the patch part."
+              ISTIO_BUMP="patch"
+              echo "::notice::Istio stayed at ${ISTIO_VERSION}."
             else
               IFS='.' read -r P_MAJ P_MIN _ <<< "${PREV_ISTIO}"
               IFS='.' read -r C_MAJ C_MIN _ <<< "${ISTIO_VERSION}"
               if [ "${C_MAJ}" != "${P_MAJ}" ]; then
-                BUMP="major"
+                ISTIO_BUMP="major"
               elif [ "${C_MIN}" != "${P_MIN}" ]; then
-                BUMP="minor"
+                ISTIO_BUMP="minor"
               else
-                BUMP="patch"
+                ISTIO_BUMP="patch"
               fi
-              echo "::notice::Istio moved ${PREV_ISTIO} -> ${ISTIO_VERSION}. Bumping the ${BUMP} part."
+              echo "::notice::Istio moved ${PREV_ISTIO} -> ${ISTIO_VERSION}, which is a ${ISTIO_BUMP} change."
             fi
+
+            # Signal 2 — conventional commits since the previous tag. A `!`
+            # marker or a BREAKING CHANGE footer means major, a feat means
+            # minor, anything else means patch. Squash merges carry the pull
+            # request title as the subject, so this reads PR titles in practice.
+            RANGE="HEAD"
+            [ -n "${LATEST_TAG}" ] && RANGE="${LATEST_TAG}..HEAD"
+            # Collected up front: piping git log straight into `grep -q` lets
+            # grep exit first, and pipefail would surface git's SIGPIPE as a
+            # failed test rather than a non-match.
+            SUBJECTS="$(git log "${RANGE}" --no-merges --format='%s')"
+            BODIES="$(git log "${RANGE}" --no-merges --format='%B')"
+
+            if grep -qE '^[a-zA-Z]+(\([^)]*\))?!:' <<< "${SUBJECTS}" \
+               || grep -qE '^BREAKING[ -]CHANGE:' <<< "${BODIES}"; then
+              COMMIT_BUMP="major"
+            elif grep -qE '^feat(\([^)]*\))?:' <<< "${SUBJECTS}"; then
+              COMMIT_BUMP="minor"
+            else
+              COMMIT_BUMP="patch"
+            fi
+            echo "::notice::Commits since ${LATEST_TAG:-the first commit} are a ${COMMIT_BUMP} change."
+
+            if [ "$(rank "${COMMIT_BUMP}")" -gt "$(rank "${ISTIO_BUMP}")" ]; then
+              BUMP="${COMMIT_BUMP}"
+            else
+              BUMP="${ISTIO_BUMP}"
+            fi
+          fi
+
+          # Only the default branch opens a new major or minor line. Every other
+          # branch is a maintenance line and may move the patch part alone, so a
+          # release cut there can never jump ahead of the line it forked from.
+          IS_DEFAULT_BRANCH=true
+          if [ -n "${DEFAULT_BRANCH}" ] && [ "${BRANCH}" != "${DEFAULT_BRANCH}" ]; then
+            IS_DEFAULT_BRANCH=false
+          fi
+
+          # BUMP already holds the resolved bump, so this one check covers an
+          # explicitly requested major or minor and an auto run whose signals
+          # resolved to one. Releasing a patch instead would ship a breaking or
+          # feature change under a version that promises neither, so this fails
+          # rather than quietly downgrading.
+          if [ "${IS_DEFAULT_BRANCH}" = false ] && [ "${BUMP}" != "patch" ] && [ "${BUMP}" != "explicit" ]; then
+            if [ "${VERSION_TYPE}" = "auto" ]; then
+              echo "::error::Changes since ${LATEST_TAG:-the first commit} amount to a ${BUMP} release, which '${BRANCH}' cannot cut — it is a maintenance branch and takes patch releases only. Release from '${DEFAULT_BRANCH}', or keep ${BUMP}-level changes off '${BRANCH}'."
+            else
+              echo "::error::'${BRANCH}' is a maintenance branch and takes patch releases only. Cut a ${BUMP} release from '${DEFAULT_BRANCH}'."
+            fi
+            exit 1
           fi
 
           case "${BUMP}" in
@@ -143,10 +258,39 @@ jobs:
             exit 1
           fi
 
-          echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          # Catches an explicit version that would open a new line off a
+          # maintenance branch, which the version-type gate above cannot see.
+          if [ "${IS_DEFAULT_BRANCH}" = false ]; then
+            IFS='.' read -r N_MAJ N_MIN _ <<< "${NEW_VERSION}"
+            if [ "${N_MAJ}" != "${MAJOR}" ] || [ "${N_MIN}" != "${MINOR}" ]; then
+              echo "::error::'${BRANCH}' is a maintenance branch, so '${NEW_VERSION}' must stay on ${MAJOR}.${MINOR}.x. Cut it from '${DEFAULT_BRANCH}' instead."
+              exit 1
+            fi
+          fi
+
+          # The baseline is scoped to this branch, but tags are repository-wide,
+          # so two branches can arrive at the same next version. That means the
+          # branch overlaps a line it does not contain — usually a support
+          # branch cut from the wrong point — and continuing would publish a
+          # version whose predecessor is missing from this history.
+          if git rev-parse -q --verify "refs/tags/${NEW_VERSION}" > /dev/null 2>&1; then
+            echo "::error::Tag '${NEW_VERSION}' already exists on a line '${BRANCH}' does not contain. The baseline here is ${LATEST_TAG:-none}, the highest tag reachable from this branch, so ${NEW_VERSION} was taken elsewhere. Branch a support line from the tag of the line it supports, then release again."
+            exit 1
+          fi
+
+          echo "::notice::Resolved version ${NEW_VERSION} from ${LATEST_TAG:-no previous tag} as a ${BUMP} release."
+
           {
-            echo "**Previous release**: ${LATEST_TAG:-none}"
+            echo "version=${NEW_VERSION}"
+            echo "is-default-branch=${IS_DEFAULT_BRANCH}"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "**Previous tag**: ${LATEST_TAG:-none}"
             echo "**Istio version**: ${ISTIO_VERSION}"
+            if [ "${VERSION_TYPE}" = "auto" ]; then
+              echo "**Istio signal**: ${ISTIO_BUMP}"
+              echo "**Commit signal**: ${COMMIT_BUMP}"
+            fi
             echo "**Bump**: ${BUMP}"
             echo "**New version**: ${NEW_VERSION}"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -154,7 +298,7 @@ jobs:
       - name: Check that the tag is free
         uses: netcracker/qubership-workflow-hub/actions/tag-action@b6bee6f61fdc8b367777c1173fc852a58878a6a7 # v2.5.0
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ steps.resolve.outputs.sha }}
           tag-name: ${{ steps.resolve.outputs.version }}
           create-tag: false
           check-tag: true
@@ -172,7 +316,7 @@ jobs:
         with:
           # Tag the exact commit the run started at, so the tag and the
           # published image are built from the same tree.
-          ref: ${{ github.sha }}
+          ref: ${{ needs.resolve-version.outputs.sha }}
           tag-name: ${{ needs.resolve-version.outputs.version }}
           tag-message: "qubership-istio ${{ needs.resolve-version.outputs.version }} (istio ${{ needs.resolve-version.outputs.istio-version }})"
           check-tag: true
@@ -189,12 +333,21 @@ jobs:
     uses: ./.github/workflows/docker-publish.yml
     with:
       version: ${{ needs.resolve-version.outputs.version }}
+      # Build from the tag just created, so the logs name the release rather
+      # than a bare SHA. The tag is immutable and points at the resolved commit,
+      # so this pins the same tree. A dry run never pushes a tag, so it falls
+      # back to the commit itself.
+      ref: ${{ inputs.dry-run && needs.resolve-version.outputs.sha || format('refs/tags/{0}', needs.resolve-version.outputs.version) }}
       dry-run: ${{ inputs.dry-run }}
+      latest: ${{ needs.resolve-version.outputs.is-default-branch == 'true' }}
+      skip-tests: ${{ inputs.skip-tests }}
 
-  # A failed build leaves no release behind, so drop the tag it was cut for.
+  # A failed build or a failed publish leaves no release behind, so drop the tag
+  # it was cut for. Leaving it would strand the tag ahead of every release and
+  # make the next run collide with a version it can no longer reach.
   rollback-tag:
-    needs: [resolve-version, create-tag, build-and-publish]
-    if: ${{ failure() && needs.create-tag.result == 'success' && !inputs.dry-run }}
+    needs: [resolve-version, create-tag, build-and-publish, github-release]
+    if: ${{ always() && failure() && needs.create-tag.result == 'success' && !inputs.dry-run }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -202,7 +355,7 @@ jobs:
       - name: Delete tag
         uses: netcracker/qubership-workflow-hub/actions/tag-action@b6bee6f61fdc8b367777c1173fc852a58878a6a7 # v2.5.0
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ needs.resolve-version.outputs.sha }}
           tag-name: ${{ needs.resolve-version.outputs.version }}
           delete-tag: true
         env:
@@ -217,5 +370,11 @@ jobs:
     with:
       version: ${{ needs.resolve-version.outputs.version }}
       tag: ${{ needs.resolve-version.outputs.version }}
+      # Without this the reusable defaults to main, and the notes would be
+      # drafted from a branch other than the one being released.
+      ref: ${{ inputs.branch }}
       publish: "true"
+      # A maintenance release is older than the tip, so it must not take the
+      # "Latest" badge from the newest release.
+      latest: ${{ needs.resolve-version.outputs.is-default-branch }}
       config-name: release-drafter-config.yml

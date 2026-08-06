@@ -20,16 +20,36 @@ on:
   workflow_call:
     inputs:
       version:
-        description: "qubership-istio release version, for example 1.1.0. Empty for dev builds."
+        description: 'Release version (e.g., 1.1.0), empty for dev builds'
         required: false
         type: string
         default: ""
+      ref:
+        description: 'Git reference (branch, tag, or SHA) to checkout and build'
+        required: false
+        type: string
+        default: ""
+      latest:
+        description: 'Tag the release image latest (default branch only)'
+        required: false
+        type: boolean
+        default: false
       dry-run:
-        description: "Build without pushing the image."
+        description: 'dry run'
+        required: false
+        type: boolean
+        default: false
+      skip-tests:
+        description: 'skip tests'
         required: false
         type: boolean
         default: false
   workflow_dispatch:
+    inputs:
+      skip-tests:
+        description: 'skip tests'
+        type: boolean
+        default: false
   push:
     branches:
       - '**'
@@ -78,11 +98,15 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
 
       - name: Resolve chart version and image tags
         id: version
         env:
           RELEASE_VERSION: ${{ inputs.version }}
+          MARK_LATEST: ${{ inputs.latest }}
+          SKIP_TESTS: ${{ inputs.skip-tests }}
           # A fork cannot write packages, and renovate images are not wanted in
           # the registry. Both are built, neither is published.
           FORCE_DRY_RUN: ${{ inputs.dry-run || (github.event_name == 'pull_request') || (github.actor == 'renovate[bot]') }}
@@ -97,7 +121,12 @@ jobs:
             # the primary tag; the istio alias keeps the bundled istio version
             # visible in the registry listing.
             CHART_VERSION="${RELEASE_VERSION}"
-            IMAGE_TAGS="${RELEASE_VERSION},${RELEASE_VERSION%.*},latest,${RELEASE_VERSION}-istio${ISTIO_VERSION}"
+            IMAGE_TAGS="${RELEASE_VERSION},${RELEASE_VERSION%.*},${RELEASE_VERSION}-istio${ISTIO_VERSION}"
+            # `latest` follows the newest release only. A patch cut from a
+            # maintenance line is older than the tip, so it must not claim it.
+            if [ "${MARK_LATEST}" = "true" ]; then
+              IMAGE_TAGS="${IMAGE_TAGS},latest"
+            fi
           else
             # Dev build. Helm requires a SemVer chart version, so the branch
             # name goes into a prerelease segment with unsupported characters
@@ -115,11 +144,20 @@ jobs:
             echo "dry-run=${FORCE_DRY_RUN}"
           } >> "$GITHUB_OUTPUT"
 
+          TESTS_STATE="run"
+          if [ "${SKIP_TESTS}" = "true" ]; then
+            TESTS_STATE="skipped"
+            if [ -n "${RELEASE_VERSION}" ]; then
+              echo "::warning::Integration tests were skipped, so ${RELEASE_VERSION} is being published without any cluster having run it."
+            fi
+          fi
+
           {
             echo "**Chart version**: ${CHART_VERSION}"
             echo "**Istio version**: ${ISTIO_VERSION}"
             echo "**Image tags**: ${IMAGE_TAGS}"
             echo "**Dry run**: ${FORCE_DRY_RUN}"
+            echo "**Integration tests**: ${TESTS_STATE}"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Stamp Chart.yaml version and appVersion
@@ -170,10 +208,19 @@ jobs:
 
   integration-test:
     needs: [ helm-charts-build ]
+    if: ${{ !inputs.skip-tests }}
     uses: ./.github/workflows/integration-test.yml
+    with:
+      ref: ${{ inputs.ref }}
 
   multiplatform_build:
     needs: [ helm-charts-build, integration-test ]
+    # A skipped integration matrix must not skip the publish with it, but a
+    # failed or cancelled one still has to stop here.
+    if: >-
+      !cancelled()
+      && needs.helm-charts-build.result == 'success'
+      && (needs.integration-test.result == 'success' || needs.integration-test.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - name: Build and push
@@ -186,6 +233,14 @@ jobs:
               "build_context": "."
             }]
           checkout: true
+          ref: ${{ inputs.ref }}
+          # `ref` is a commit SHA on the release path, so the action's checkout
+          # lands on a detached HEAD. The hub defaults this to `git`, which makes
+          # docker/metadata-action read the local repo to infer a branch and fail
+          # with "Cannot infer ref from detached HEAD". `workflow` reads
+          # GITHUB_REF instead. Its output is discarded either way, because the
+          # tags below are explicit.
+          context: workflow
           download-artifact: true
           download-artifact-name: helm-templates
           download-artifact-path: ./helm-templates/qubership-istio/

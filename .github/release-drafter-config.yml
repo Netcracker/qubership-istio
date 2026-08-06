@@ -24,6 +24,9 @@ categories:
   - title: '📦 Dependencies'
     labels:
       - dependencies
+  - title: '🔧 Maintenance'
+    labels:
+      - maintenance
 
 change-template: '- $TITLE (#$NUMBER) by @$AUTHOR'
 no-changes-template: 'No significant changes'

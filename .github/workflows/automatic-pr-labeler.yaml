@@ -1,0 +1,53 @@
+---
+# Labels a pull request from the conventional-commit prefix of its title, so the
+# release notes group it correctly. See .github/auto-labeler-config.yaml for the
+# prefix-to-label map and .github/release-drafter-config.yml for the categories.
+
+name: Automatic PR Labeler
+run-name: "PR #${{ github.event.pull_request.number }} - Automatic Labeler"
+
+on:
+  pull_request:
+    branches: [main]
+    types:
+      [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  assign-labels:
+    name: "Assign labels to PR #${{ github.event.pull_request.number }}"
+    if: (github.event.pull_request.merged == false) && (github.event.pull_request.user.login != 'github-actions[bot]')
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Assign labels
+        id: action-assign-labels
+        uses: mauroalderete/action-assign-labels@671a4ca2da0f900464c58b8b5540a1e07133e915 # v1.5.1
+        with:
+          pull-request-number: ${{ github.event.pull_request.number }}
+          github-token: ${{ github.token }}
+          conventional-commits: "./.github/auto-labeler-config.yaml"
+          maintain-labels-not-matched: true
+          # A fork pull request gets a read-only token, so the labels are
+          # reported in the summary for a maintainer to apply.
+          apply-changes: ${{ github.event.pull_request.base.repo.id == github.event.pull_request.head.repo.id }}
+
+      - name: Report labels for a fork pull request
+        if: ${{ github.event.pull_request.base.repo.id != github.event.pull_request.head.repo.id }}
+        env:
+          LABELS_NEXT: ${{ steps.action-assign-labels.outputs.labels-next }}
+        run: |
+          {
+            echo "This pull request comes from a fork, so labels were not applied."
+            echo "Assign them by hand: ${LABELS_NEXT}"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,29 @@
+---
+# Maps the conventional-commit prefix of a pull request title to a label.
+# The labels line up with the categories in release-drafter-config.yml, so a
+# correctly titled pull request lands in the right section of the release notes
+# without anyone labeling it by hand.
+#
+# Read by .github/workflows/automatic-pr-labeler.yaml.
+conventional-commits:
+  - type: 'breaking_change'
+    nouns: ['BREAKING CHANGE', 'BREAKING', 'MAJOR']
+    labels: ['breaking-change']
+  - type: 'feature'
+    nouns: ['FEATURE', 'Feature', 'feature', 'FEAT', 'Feat', 'feat']
+    labels: ['enhancement']
+  - type: 'fix'
+    nouns: ['FIX', 'Fix', 'fix', 'FIXED', 'Fixed', 'fixed']
+    labels: ['bug']
+  - type: 'refactor'
+    nouns: ['refactor', 'Refactor', 'refactoring', 'Refactoring']
+    labels: ['refactor']
+  - type: 'documentation'
+    nouns: ['docs', 'doc', 'document', 'documentation']
+    labels: ['documentation']
+  - type: 'dependencies'
+    nouns: ['deps', 'dependencies']
+    labels: ['dependencies']
+  - type: 'maintenance'
+    nouns: ['ci', 'chore', 'build', 'test', 'style']
+    labels: ['maintenance']
