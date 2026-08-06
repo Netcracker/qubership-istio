@@ -9,7 +9,7 @@ on:
         threshold-days:
           description: "Number of days to keep container versions"
           required: false
-          default: "8"
+          default: "7"
         included-tags:
           description: "Tags to include for deletion"
           required: false

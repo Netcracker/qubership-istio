@@ -58,13 +58,14 @@ When `MONITORING_ENABLED=true` (default), the chart deploys:
 
 A scratch Docker image (`qubership-istio-transfer`) is built and pushed to `ghcr.io` by CI. It embeds the packaged Helm chart for platform delivery.
 
-| Build | Image tags | Chart `version` | Chart `appVersion` |
-|-------|-----------|-----------------|--------------------|
-| Release | `1.0.2`, `1.0`, `latest`, `1.0.2-istio1.30.2` | `1.0.2` | `1.30.2` |
-| Branch push | `<branch-slug>` | `0.0.0-<branch-slug>` | `1.30.2` |
+| Build                                          | Image tags | Chart `version` | Chart `appVersion` |
+|------------------------------------------------|-----------|-----------------|--------------------|
+| Release from the default branch                | `1.0.2`, `1.0`, `latest`, `1.0.2-istio1.30.2` | `1.0.2` | `1.30.2` |
+| Release from a support branch                  | `1.0.2`, `1.0`, `1.0.2-istio1.30.2` — no `latest` | `1.0.2` | `1.30.2` |
+| Branch push                                    | `<branch-slug>` | `0.0.0-<branch-slug>` | `1.30.2` |
 | Pull request from a fork, or a renovate branch | none (dry run) | — | — |
 
-Branch tags expire after 8 days; [the weekly cleanup job](.github/workflows/cleanup-old-docker-container.yml) keeps `latest` and every version-shaped tag.
+Branch tags expire after 7 days; [the weekly cleanup job](.github/workflows/cleanup-old-docker-container.yml) keeps `latest` and every version-shaped tag.
 
 ## Versioning and Releases
 
@@ -77,13 +78,25 @@ An Istio bump moves the matching part of the qubership-istio version:
 | Istio major (`1.x` → `2.x`) | major |
 | Istio minor (`1.30` → `1.31`) | minor |
 | Istio patch (`1.30.1` → `1.30.2`) | patch |
-| qubership-only change | patch, or minor for a new capability |
+| `feat!:` or a `BREAKING CHANGE:` footer | major |
+| `feat:` | minor |
+| `fix:`, `ci:`, `chore:`, anything else | patch |
 
-To cut a release, run the [Release workflow](.github/workflows/release.yml) from the Actions tab. The default `auto` version type reads the rule above off the Istio chart dependency in `Chart.yaml`, comparing the dispatched commit against the previous release tag; pick `patch`, `minor`, `major`, or `explicit` to override it. The workflow tags the commit `<version>`, runs the full build and integration matrix, publishes the image, and creates the GitHub release page with notes drafted from the merged pull requests. A failed build removes the tag it was cut for.
+To cut a release, run the [Release workflow](.github/workflows/release.yml) from the Actions tab. The `branch` input picks what gets released — `main` by default — independently of the branch the workflow is dispatched on; its head commit is resolved once and every later job pins that SHA.
 
-Use `dry-run` to resolve the version and run the build without touching tags, the registry, or the release page.
+The default `auto` version type reads both signals since the previous tag — the Istio chart dependency in `Chart.yaml`, and the conventional-commit prefixes of the commits — and takes the stronger one. So an Istio patch bump landing alongside a `feat:` gives a minor release. Pick `patch`, `minor`, `major`, or `explicit` to override it.
 
-Release notes are grouped by pull request label — `breaking-change`, `feature`, `enhancement`, `bug`, `fix`, `bugfix`, `refactor`, `documentation`, `dependencies`. Renovate labels its Istio pull requests with `dependencies` plus `major`, `minor`, or `patch`, so the required bump is visible before the merge.
+A branch with no commits since its last release is rejected — there is nothing new to ship, and tagging the same commit twice is what leaves one commit carrying two versions and an ambiguous baseline for anything branched from it.
+
+The workflow tags the commit `<version>`, runs the full build and integration matrix, publishes the image, and creates the GitHub release page with notes drafted from the merged pull requests. A failed build or a failed publish removes the tag it was cut for. Use `dry-run` to resolve the version and run the build without touching tags, the registry, or the release page. `skip-tests` drops the integration matrix, which cuts most of the wall time off a rehearsal — on a real release it means publishing an image no cluster has run, so the run logs a warning and the job summary records it.
+
+Release notes are grouped by pull request label — `breaking-change`, `feature`, `enhancement`, `bug`, `fix`, `bugfix`, `refactor`, `documentation`, `dependencies`, `maintenance`. Renovate labels its Istio pull requests with `dependencies`.
+
+### Long-term support lines
+
+Only the default branch opens a new major or minor line. Any other branch is a maintenance line and moves the patch part alone — a release that would move more than that fails. That covers `major` and `minor`, an `auto` run whose signals resolve to either, and an `explicit` version that leaves the branch's `X.Y.x` line. A failed `auto` release there means a `feat:` or a breaking change landed on the branch: either release it from the default branch, or keep such changes off the maintenance line.
+
+```
 
 ## Documentation
 

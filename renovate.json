@@ -16,25 +16,6 @@
       "automerge": false,
       "allowedVersions": "/^\\d+\\.\\d+\\.\\d+$/",
       "addLabels": ["dependencies"]
-    },
-    {
-      "description": "An istio version bump moves the matching part of the qubership-istio version. The label drives the release-drafter version resolver.",
-      "matchDatasources": ["helm"],
-      "matchPackageNames": ["base", "cni", "istiod", "ztunnel"],
-      "matchUpdateTypes": ["major"],
-      "addLabels": ["major"]
-    },
-    {
-      "matchDatasources": ["helm"],
-      "matchPackageNames": ["base", "cni", "istiod", "ztunnel"],
-      "matchUpdateTypes": ["minor"],
-      "addLabels": ["minor"]
-    },
-    {
-      "matchDatasources": ["helm"],
-      "matchPackageNames": ["base", "cni", "istiod", "ztunnel"],
-      "matchUpdateTypes": ["patch"],
-      "addLabels": ["patch"]
     }
   ]
 }

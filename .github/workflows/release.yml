@@ -24,10 +24,6 @@
 # The `auto` version type reads both signals since the previous tag — the istio
 # chart dependency in helm-templates/qubership-istio/Chart.yaml, and the
 # conventional-commit prefixes of the commits — and takes the stronger one.
-#
-# Release tags carry no `v` prefix, matching the existing 1.0.0 and 1.0.1 tags.
-# Every tag-name here is therefore passed explicitly, because the hub actions
-# default to `v<version>`.
 
 name: Release
 run-name: "Release ${{ inputs.branch }} (${{ inputs.version-type }})${{ inputs.dry-run && ' - dry run' || '' }}${{ inputs.skip-tests && ' - no tests' || '' }} by ${{ github.actor }}"
@@ -57,11 +53,11 @@ on:
         required: false
         default: ""
       dry-run:
-        description: 'Dry run (no tag, image, or release page)'
+        description: 'dry run'
         type: boolean
         default: false
       skip-tests:
-        description: 'Skip the integration test matrix (a real release then ships untested)'
+        description: 'skip tests'
         type: boolean
         default: false
 
@@ -370,11 +366,7 @@ jobs:
     with:
       version: ${{ needs.resolve-version.outputs.version }}
       tag: ${{ needs.resolve-version.outputs.version }}
-      # Without this the reusable defaults to main, and the notes would be
-      # drafted from a branch other than the one being released.
       ref: ${{ inputs.branch }}
-      publish: "true"
-      # A maintenance release is older than the tip, so it must not take the
-      # "Latest" badge from the newest release.
+      publish: "false"
       latest: ${{ needs.resolve-version.outputs.is-default-branch }}
       config-name: release-drafter-config.yml

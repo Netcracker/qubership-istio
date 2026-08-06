@@ -1,10 +1,12 @@
 ---
-# Labels a pull request from the conventional-commit prefix of its title, so the
-# release notes group it correctly. See .github/auto-labeler-config.yaml for the
-# prefix-to-label map and .github/release-drafter-config.yml for the categories.
+
+# The workflow template for automatic PR labeler.
+# It requires to have a configuration file with labels and conditions to apply them.
+# The configuration file should be placed in the .github folder and named auto-labeler-config.yaml.
+# Example file can be found there:
+# https://github.com/Netcracker/.github/blob/main/config/examples/auto-labeler-config.yaml
 
 name: Automatic PR Labeler
-run-name: "PR #${{ github.event.pull_request.number }} - Automatic Labeler"
 
 on:
   pull_request:
@@ -17,20 +19,18 @@ permissions:
 
 jobs:
   assign-labels:
-    name: "Assign labels to PR #${{ github.event.pull_request.number }}"
-    if: (github.event.pull_request.merged == false) && (github.event.pull_request.user.login != 'github-actions[bot]')
+    if: (github.event.pull_request.merged == false) && (github.event.pull_request.user.login != 'dependabot[bot]') && (github.event.pull_request.user.login != 'github-actions[bot]')
     permissions:
+      pull-requests: write
       contents: read
       issues: write
-      pull-requests: write
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
 
-      - name: Assign labels
+      - name: "Execute assign labels"
         id: action-assign-labels
         uses: mauroalderete/action-assign-labels@671a4ca2da0f900464c58b8b5540a1e07133e915 # v1.5.1
         with:
@@ -38,16 +38,19 @@ jobs:
           github-token: ${{ github.token }}
           conventional-commits: "./.github/auto-labeler-config.yaml"
           maintain-labels-not-matched: true
-          # A fork pull request gets a read-only token, so the labels are
-          # reported in the summary for a maintainer to apply.
           apply-changes: ${{ github.event.pull_request.base.repo.id == github.event.pull_request.head.repo.id }}
 
-      - name: Report labels for a fork pull request
+      - name: Set labels-next safely
         if: ${{ github.event.pull_request.base.repo.id != github.event.pull_request.head.repo.id }}
+        run: |
+          echo "LABELS_NEXT=$(echo ${STEPS_ACTION_ASSIGN_LABELS_OUTPUTS_LABELS_NEXT} | tr -dc 'a-zA-Z0-9-,')" >> $GITHUB_ENV
         env:
-          LABELS_NEXT: ${{ steps.action-assign-labels.outputs.labels-next }}
+          STEPS_ACTION_ASSIGN_LABELS_OUTPUTS_LABELS_NEXT: ${{ steps.action-assign-labels.outputs.labels-next }}
+      - name: "Drop warning if PR from fork"
+        if: ${{ github.event.pull_request.base.repo.id != github.event.pull_request.head.repo.id }}
         run: |
           {
-            echo "This pull request comes from a fork, so labels were not applied."
-            echo "Assign them by hand: ${LABELS_NEXT}"
+            echo "⚠️ Pull request from fork! ⚠️";
+            echo "Labels will not be applied to PR. Assign them manually please.";
+            echo "Labels to assign: '${LABELS_NEXT}'";
           } >> "$GITHUB_STEP_SUMMARY"
