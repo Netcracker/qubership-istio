@@ -218,20 +218,6 @@ jobs:
             IS_DEFAULT_BRANCH=false
           fi
 
-          # BUMP already holds the resolved bump, so this one check covers an
-          # explicitly requested major or minor and an auto run whose signals
-          # resolved to one. Releasing a patch instead would ship a breaking or
-          # feature change under a version that promises neither, so this fails
-          # rather than quietly downgrading.
-          if [ "${IS_DEFAULT_BRANCH}" = false ] && [ "${BUMP}" != "patch" ] && [ "${BUMP}" != "explicit" ]; then
-            if [ "${VERSION_TYPE}" = "auto" ]; then
-              echo "::error::Changes since ${LATEST_TAG:-the first commit} amount to a ${BUMP} release, which '${BRANCH}' cannot cut — it is a maintenance branch and takes patch releases only. Release from '${DEFAULT_BRANCH}', or keep ${BUMP}-level changes off '${BRANCH}'."
-            else
-              echo "::error::'${BRANCH}' is a maintenance branch and takes patch releases only. Cut a ${BUMP} release from '${DEFAULT_BRANCH}'."
-            fi
-            exit 1
-          fi
-
           case "${BUMP}" in
             explicit)
               if [ -z "${EXPLICIT_VERSION}" ]; then
@@ -254,12 +240,15 @@ jobs:
             exit 1
           fi
 
-          # Catches an explicit version that would open a new line off a
-          # maintenance branch, which the version-type gate above cannot see.
+          # Only the default branch opens a new major or minor line.
           if [ "${IS_DEFAULT_BRANCH}" = false ]; then
             IFS='.' read -r N_MAJ N_MIN _ <<< "${NEW_VERSION}"
             if [ "${N_MAJ}" != "${MAJOR}" ] || [ "${N_MIN}" != "${MINOR}" ]; then
-              echo "::error::'${BRANCH}' is a maintenance branch, so '${NEW_VERSION}' must stay on ${MAJOR}.${MINOR}.x. Cut it from '${DEFAULT_BRANCH}' instead."
+              if [ "${VERSION_TYPE}" = "auto" ]; then
+                echo "::error::Changes since ${LATEST_TAG:-the first commit} amount to a ${BUMP} release (${NEW_VERSION}), but '${BRANCH}' is a maintenance branch and stays on ${MAJOR}.${MINOR}.x. Release from '${DEFAULT_BRANCH}', or keep ${BUMP}-level changes off '${BRANCH}'."
+              else
+                echo "::error::'${BRANCH}' is a maintenance branch and stays on ${MAJOR}.${MINOR}.x, so it cannot cut ${NEW_VERSION}. Release it from '${DEFAULT_BRANCH}' instead."
+              fi
               exit 1
             fi
           fi
