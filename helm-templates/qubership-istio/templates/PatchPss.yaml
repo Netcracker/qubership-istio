@@ -1,0 +1,174 @@
+{{- if .Values.ENABLE_PRIVILEGED_PSS }}
+---
+# Identity for the patch-pss Job. Weight 0 so it exists before the Job (weight 1).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: istio-patch-pss
+  labels:
+    app: qubership-istio
+    release: {{ .Release.Name }}
+    app.kubernetes.io/name: istio-patch-pss
+    app.kubernetes.io/part-of: qubership-istio
+    app.kubernetes.io/component: pss-patch-resources
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
+{{- /* Undefined at parent level unless the operator sets it; an empty list is rejected. */}}
+{{- with .Values.global.imagePullSecrets }}
+imagePullSecrets:
+{{- toYaml . | nindent 2 }}
+{{- end }}
+---
+# A namespaced Role can authorize the namespace object itself: the apiserver sets the
+# request's namespace attribute to <ns> for /api/v1/namespaces/<ns>.
+# `kubectl label ns` needs only get+patch. Never add list/watch — resourceNames does
+# not restrict collection verbs, so it would widen this to every namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: istio-patch-pss
+  labels:
+    app: qubership-istio
+    release: {{ .Release.Name }}
+    app.kubernetes.io/name: istio-patch-pss
+    app.kubernetes.io/part-of: qubership-istio
+    app.kubernetes.io/component: pss-patch-resources
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    resourceNames:
+      - {{ .Release.Namespace }}
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: istio-patch-pss
+  labels:
+    app: qubership-istio
+    release: {{ .Release.Name }}
+    app.kubernetes.io/name: istio-patch-pss
+    app.kubernetes.io/part-of: qubership-istio
+    app.kubernetes.io/component: pss-patch-resources
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: istio-patch-pss
+subjects:
+  - kind: ServiceAccount
+    name: istio-patch-pss
+    # namespace omitted: defaults to the binding's own namespace.
+---
+# Istio ambient requires privileged pods (istio-cni: hostNetwork + NET_ADMIN/SYS_ADMIN;
+# ztunnel: the same). Under Pod Security Admission both DaemonSets are accepted as
+# objects but their pods are rejected, leaving the mesh with no data plane.
+# This pre-install/pre-upgrade hook labels the release namespace enforce=privileged
+# before any Istio manifest is applied. Idempotent: no write when already correct.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: istio-patch-pss
+  labels:
+    app: qubership-istio
+    release: {{ .Release.Name }}
+    app.kubernetes.io/name: istio-patch-pss
+    app.kubernetes.io/part-of: qubership-istio
+    app.kubernetes.io/component: pss-patch-resources
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    # 1 > the RBAC resources' 0, so the SA/Role/RoleBinding already exist.
+    "helm.sh/hook-weight": "1"
+    # before-hook-creation is required: Job pod templates are immutable, so a
+    # surviving same-named Job breaks the second upgrade. hook-failed is omitted
+    # on purpose so failed Jobs and their logs survive for triage.
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
+spec:
+  # Retries count against helm's --timeout, and both realistic failures
+  # (RBAC denied, admission policy forbids the label) are permanent.
+  backoffLimit: 2
+  template:
+    metadata:
+      name: istio-patch-pss
+      labels:
+        app: qubership-istio
+        release: {{ .Release.Name }}
+        app.kubernetes.io/name: istio-patch-pss
+        app.kubernetes.io/part-of: qubership-istio
+        app.kubernetes.io/component: pss-patch-resources
+    spec:
+      restartPolicy: Never
+      serviceAccountName: istio-patch-pss
+      # Must stay restricted-compliant: this pod has to be admitted under the very
+      # policy it exists to relax.
+      securityContext:
+        {{- toYaml .Values.patchPss.podSecurityContext | nindent 8 }}
+      containers:
+        - name: patch-pss
+          image: {{ .Values.patchPss.image | quote }}
+          imagePullPolicy: {{ .Values.patchPss.imagePullPolicy }}
+          env:
+            - name: NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            # Image sets HOME=/ and the rootfs is read-only; point kubectl's cache at /tmp.
+            - name: HOME
+              value: /tmp
+            - name: KUBECACHEDIR
+              value: /tmp/.kube/cache
+          # The image's ENTRYPOINT is kubectl, so command must be a shell.
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -o errexit
+              set -o nounset
+
+              LABEL_KEY="pod-security.kubernetes.io/enforce"
+              LABEL_VALUE="privileged"
+
+              if [ -z "${NAMESPACE}" ]; then
+                echo "ERROR: NAMESPACE is empty; refusing to patch an unknown namespace"
+                exit 121
+              fi
+
+              # An absent label yields an empty string and exit 0.
+              current="$(kubectl get namespace "${NAMESPACE}" \
+                -o jsonpath='{.metadata.labels.pod-security\.kubernetes\.io/enforce}')"
+              echo "Namespace ${NAMESPACE}: current ${LABEL_KEY}=${current:-<unset>}"
+
+              if [ "${current}" = "${LABEL_VALUE}" ]; then
+                echo "OK: ${LABEL_KEY} is already '${LABEL_VALUE}'; nothing to do"
+                exit 0
+              fi
+
+              if kubectl label --overwrite namespace "${NAMESPACE}" "${LABEL_KEY}=${LABEL_VALUE}"; then
+                echo "OK: namespace ${NAMESPACE} labelled ${LABEL_KEY}=${LABEL_VALUE}"
+              else
+                echo "ERROR: failed to label namespace ${NAMESPACE} with ${LABEL_KEY}=${LABEL_VALUE}"
+                echo "Istio ambient (istio-cni, ztunnel) needs privileged pods and will be"
+                echo "rejected by Pod Security Admission until this label is set. Grant the"
+                echo "deploy identity get+patch on the namespace, apply the label out-of-band,"
+                echo "or set ENABLE_PRIVILEGED_PSS=false."
+                exit 1
+              fi
+          resources:
+            {{- toYaml .Values.patchPss.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.patchPss.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        # Only so readOnlyRootFilesystem and HOME=/tmp can coexist.
+        - name: tmp
+          emptyDir: {}
+{{- end }}

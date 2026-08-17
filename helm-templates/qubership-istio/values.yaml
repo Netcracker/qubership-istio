@@ -159,3 +159,49 @@ ztunnel:
 MONITORING_ENABLED: true
 monitoring:
   scrapeInterval: 15s
+
+# ---------------------------------------------------------------------------
+# pre-deploy — namespace Pod Security Standards patch
+# ---------------------------------------------------------------------------
+# Istio ambient requires privileged pods (istio-cni needs hostNetwork plus
+# NET_ADMIN/SYS_ADMIN; ztunnel needs the same). Where Pod Security Admission
+# enforces "baseline" or "restricted" on this namespace, those DaemonSets are
+# accepted as objects but their pods are rejected, leaving no data plane.
+#
+# When enabled, a pre-install/pre-upgrade hook Job labels the release namespace
+# pod-security.kubernetes.io/enforce=privileged before Istio is installed.
+# Opt-in: it is a no-op without PSA, and namespace security labels are usually
+# owned by the cluster administrator. The label is NOT removed on uninstall.
+ENABLE_PRIVILEGED_PSS: false
+
+patchPss:
+  # kubectl image for the patch Job. Not derived from global.hub, which is the
+  # *Istio* image hub (<hub>/pilot:<tag>) — this is not an Istio image.
+  image: ghcr.io/netcracker/qubership-docker-kubectl:main
+  imagePullPolicy: IfNotPresent
+
+  resources:
+    requests:
+      cpu: 75m
+      memory: 75Mi
+    limits:
+      cpu: 150m
+      memory: 150Mi
+
+  # Must stay restricted-compliant: if the namespace already enforces
+  # "restricted", a non-compliant pod is rejected and the label can never be
+  # fixed. runAsUser must stay non-zero — runAsNonRoot alone is re-checked by the
+  # kubelet against the image's user. 1001 matches the kubectl image's USER.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1001
+    seccompProfile:
+      type: RuntimeDefault
+
+  # Container-level only — PSS "restricted" does not inherit these from the pod.
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL

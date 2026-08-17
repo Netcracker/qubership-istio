@@ -30,3 +30,26 @@ sub-chart name in your values file. For example:
       requests:
         cpu: 500m
         memory: 512Mi
+
+Pod Security Standards:
+{{- if .Values.ENABLE_PRIVILEGED_PSS }}
+
+  A pre-install/pre-upgrade hook labelled namespace {{ .Release.Namespace }} with
+  pod-security.kubernetes.io/enforce=privileged. The label is left in place by
+  `helm uninstall`; remove it manually if the namespace is reused.
+{{- else }}
+
+  Istio ambient requires privileged pods (istio-cni and ztunnel). If this cluster
+  enforces Pod Security Admission on {{ .Release.Namespace }}, those DaemonSets
+  will report 0 ready pods and the rejection appears only in events:
+
+    kubectl get events -n {{ .Release.Namespace }} --field-selector reason=FailedCreate
+
+  Fix it either out-of-band:
+
+    kubectl label --overwrite namespace {{ .Release.Namespace }} \
+      pod-security.kubernetes.io/enforce=privileged
+
+  or by re-running the install with --set ENABLE_PRIVILEGED_PSS=true, which does
+  the same from a pre-install hook.
+{{- end }}
