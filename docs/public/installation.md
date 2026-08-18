@@ -118,6 +118,17 @@ The namespace must therefore carry `pod-security.kubernetes.io/enforce=privilege
 
 The option is disabled by default, because it is a no-op on clusters without Pod Security Admission and because namespace security labels are usually owned by the cluster administrator. Note that the label is **not** removed by `helm uninstall`.
 
+On a cluster with no access to the public internet the image has to be overridden together with the switch, because `patchPss.image` defaults to `ghcr.io`. A released tag is worth preferring over `main`, whose content changes under the same name:
+
+```bash
+helm upgrade --install qubership-istio <chart> \
+  --namespace istio-system --create-namespace \
+  --set ENABLE_PRIVILEGED_PSS=true \
+  --set patchPss.image=<registry>/netcracker/qubership-docker-kubectl:<tag>
+```
+
+An unreachable image here costs more than the label. The Job is a `pre-install`/`pre-upgrade` hook, so Helm waits for it before applying anything else: the release fails with no Istio component installed at all, not with Istio installed and the namespace unlabelled. Where the deploy identity cannot be granted `get` and `patch` on the namespace, use the first option instead and leave `ENABLE_PRIVILEGED_PSS` off.
+
 ### Helm
 Install via Helm into `istio-system` namespace.
 
