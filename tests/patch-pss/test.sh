@@ -23,7 +23,10 @@ ORIGINAL_LABEL="$(read_label)"
 
 # Always hand the namespace back as we found it: a leftover enforce=restricted
 # would make every later pod creation in istio-system fail.
+PREINSTALL_NS="patch-pss-preinstall"
+
 cleanup() {
+  kubectl delete namespace "${PREINSTALL_NS}" --ignore-not-found --wait=false || true
   if [ -z "${ORIGINAL_LABEL}" ]; then
     kubectl label namespace "${ISTIO_NAMESPACE}" "${LABEL_KEY}-" || true
   else
@@ -131,5 +134,46 @@ if [ "$(read_label)" != "privileged" ]; then
   fail "label changed on the idempotent re-run"
 fi
 echo "OK: second run is a no-op"
+
+# --- 6. Install path: the Job is admitted by a namespace that enforced
+#        "restricted" from the moment it was created ---
+# Checks 3-5 exercise the pre-upgrade branch, where the namespace is relaxed
+# again by an earlier release and the label is put back by hand. The install
+# branch is the harder one and the one an air-gapped operator hits first: the
+# namespace is born "restricted", nothing has run in it yet, and the hook has to
+# get its own pod past the policy it exists to relax. Rendering the hook on its
+# own keeps this to one namespace and does not disturb the release under test.
+kubectl create namespace "${PREINSTALL_NS}"
+kubectl label --overwrite namespace "${PREINSTALL_NS}" "${LABEL_KEY}=restricted"
+
+helm template "${HELM_RELEASE}" "${HELM_CHART_PATH}" \
+  --namespace "${PREINSTALL_NS}" \
+  --set MONITORING_ENABLED=false \
+  --set ENABLE_PRIVILEGED_PSS=true \
+  --show-only templates/PatchPss.yaml > "${RENDER_DIR}/preinstall.yaml"
+
+# Without --validate the apiserver still runs admission, which is the point here:
+# a non-compliant pod template is rejected when the Job creates its pod.
+kubectl apply -n "${PREINSTALL_NS}" -f "${RENDER_DIR}/preinstall.yaml"
+
+if ! kubectl wait --for=condition=complete job/istio-patch-pss \
+    -n "${PREINSTALL_NS}" --timeout=120s; then
+  echo "--- Job ---"
+  kubectl describe job/istio-patch-pss -n "${PREINSTALL_NS}" || true
+  echo "--- pods ---"
+  kubectl get pods -n "${PREINSTALL_NS}" -o wide || true
+  echo "--- events ---"
+  kubectl get events -n "${PREINSTALL_NS}" --sort-by=.lastTimestamp || true
+  fail "patch-pss Job did not complete in a namespace that enforces restricted"
+fi
+
+PREINSTALL_LABEL="$(kubectl get namespace "${PREINSTALL_NS}" \
+  -o jsonpath='{.metadata.labels.pod-security\.kubernetes\.io/enforce}')"
+if [ "${PREINSTALL_LABEL}" != "privileged" ]; then
+  fail "expected ${LABEL_KEY}=privileged on ${PREINSTALL_NS}, got '${PREINSTALL_LABEL}'"
+fi
+echo "OK: hook admitted itself into a restricted namespace and relabelled it on the install path"
+
+kubectl delete namespace "${PREINSTALL_NS}" --wait=false
 
 echo "All patch-pss checks passed"
