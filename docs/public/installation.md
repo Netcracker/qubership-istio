@@ -8,7 +8,6 @@
   - [qubership-istio](#qubership-istio)
 - [Installation](#installation)
   - [Before you begin](#before-you-begin)
-    - [Pod Security Admission](#pod-security-admission)
   - [On-prem](#on-prem)
 - [Upgrade](#upgrade)
 - [Rollback](#rollback)
@@ -72,7 +71,7 @@ Recommended for deployments with high workload and large amount of data.
 |Parameter          |Type   |Mandatory|Default value|Description                                                                                 |
 |-------------------|-------|---------|-------------|--------------------------------------------------------------------------------------------|
 |MONITORING_ENABLED |boolean|no       |true         |Flag to install custom resources (PodMonitor and grafana dashboard) for prometheus monitoring|
-|ENABLE_PRIVILEGED_PSS|boolean|no     |false        |Run a pre-install/pre-upgrade hook Job that labels the release namespace `pod-security.kubernetes.io/enforce=privileged`. Required on clusters where Pod Security Admission enforces `baseline` or `restricted` on `istio-system` — see [Pod Security Admission](#pod-security-admission)|
+|ENABLE_PRIVILEGED_PSS|boolean|no     |false        |Label the release namespace `pod-security.kubernetes.io/enforce=privileged` from a pre-install/pre-upgrade hook Job, for clusters where Pod Security Admission would otherwise reject the Ambient Mesh pods. Needs `get` and `patch` on the namespace|
 |patchPss.image     |string |no       |`ghcr.io/netcracker/qubership-docker-kubectl:main`|kubectl image used by the PSS patch Job. Not an Istio image, so it is not derived from `global.hub`|
 |patchPss.imagePullPolicy|string|no   |IfNotPresent |Image pull policy for the PSS patch Job                                                     |
 |patchPss.resources |object |no       |75m/75Mi requests, 150m/150Mi limits|Resources for the PSS patch Job container                                          |
@@ -91,43 +90,6 @@ qubership-istio: # root helm chart
 # Installation
 ## Before you begin
 Qubership Istio distro should always be installed into `istio-system` namespace. No other applications should be installed in this namespace. Only single instance of Qubership Istio must be installed on kubernetes cluster.
-
-### Pod Security Admission
-Istio Ambient Mesh requires privileged pods: the `istio-cni` DaemonSet needs `hostNetwork` together with the `NET_ADMIN` and `SYS_ADMIN` capabilities, and `ztunnel` needs the same. If Pod Security Admission enforces `baseline` or `restricted` on `istio-system`, both DaemonSets are created as objects but their pods are rejected at admission. The symptom is misleading: the DaemonSets exist with `DESIRED > 0` and `READY 0`, and the rejection is visible only in events:
-
-```bash
-kubectl get events -n istio-system --field-selector reason=FailedCreate
-```
-
-The namespace must therefore carry `pod-security.kubernetes.io/enforce=privileged`. There are two ways to arrange that:
-
-1. A cluster administrator applies the label out-of-band before the installation:
-
-   ```bash
-   kubectl label --overwrite namespace istio-system \
-     pod-security.kubernetes.io/enforce=privileged
-   ```
-
-2. Install with `ENABLE_PRIVILEGED_PSS=true`, which does the same from a `pre-install`/`pre-upgrade` hook Job before any Istio component is applied:
-
-   ```bash
-   helm upgrade --install qubership-istio <chart> \
-     --namespace istio-system --create-namespace \
-     --set ENABLE_PRIVILEGED_PSS=true
-   ```
-
-The option is disabled by default, because it is a no-op on clusters without Pod Security Admission and because namespace security labels are usually owned by the cluster administrator. Note that the label is **not** removed by `helm uninstall`.
-
-On a cluster with no access to the public internet the image has to be overridden together with the switch, because `patchPss.image` defaults to `ghcr.io`. A released tag is worth preferring over `main`, whose content changes under the same name:
-
-```bash
-helm upgrade --install qubership-istio <chart> \
-  --namespace istio-system --create-namespace \
-  --set ENABLE_PRIVILEGED_PSS=true \
-  --set patchPss.image=<registry>/netcracker/qubership-docker-kubectl:<tag>
-```
-
-An unreachable image here costs more than the label. The Job is a `pre-install`/`pre-upgrade` hook, so Helm waits for it before applying anything else: the release fails with no Istio component installed at all, not with Istio installed and the namespace unlabelled. Where the deploy identity cannot be granted `get` and `patch` on the namespace, use the first option instead and leave `ENABLE_PRIVILEGED_PSS` off.
 
 ### Helm
 Install via Helm into `istio-system` namespace.
