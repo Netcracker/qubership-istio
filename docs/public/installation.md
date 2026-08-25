@@ -2,6 +2,7 @@
 - [Prerequisites](#prerequisites)
   - [Common](#common)
   - [Kubernetes](#kubernetes)
+    - [Pod Security Admission](#pod-security-admission)
 - [Best practices and recommendations](#best-practices-and-recommendations)
   - [HWE](#hwe)
 - [Parameters](#parameters)
@@ -33,6 +34,38 @@ Qubership Istio should be installed under the service account with cluster-admin
 Supported k8s versions: 1.31, 1.32, 1.33, 1.34, 1.35.
 
 Kubernetes Gateway API CRDs are not included into this distro - they should be preinstalled on the cluster.
+
+### Pod Security Admission
+Istio Ambient Mesh requires privileged pods: `istio-cni` and `ztunnel` need `hostNetwork` together with the `NET_ADMIN` and `SYS_ADMIN` capabilities.
+If Pod Security Admission enforces `baseline` or `restricted` on `istio-system`, both DaemonSets are created but their pods are rejected at admission.
+To be able to install the distro you need to provide `privileged` policy to `istio-system` namespace as prerequisite step.
+
+It can be performed with the following command:
+
+```bash
+kubectl label --overwrite ns istio-system pod-security.kubernetes.io/enforce=privileged
+```
+
+This command can be executed automatically with property `ENABLE_PRIVILEGED_PSS: true` in deployment parameters.
+It requires the following cluster rights for deployment user:
+
+```yaml
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "patch"]
+    resourceNames:
+    - istio-system
+```
+
+The property runs a pre-install hook Job with the `kubectl` image from `patchPss.image`.
+Override it when the default registry is not reachable from the cluster:
+
+```yaml
+qubership-istio:
+  patchPss:
+    image: <registry>/qubership-docker-kubectl:<tag>
+```
+
 
 # Best practices and recommendations
 ## HWE
