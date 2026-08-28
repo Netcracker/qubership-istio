@@ -729,11 +729,65 @@
         "type": "datasource",
         "uid": "-- Mixed --"
       },
+      "description": "Number of push errors. Many of these are at least potentional fatal and should be explored in-depth via Istiod logs.\nNote: metrics here do not use rate() to avoid missing transition from \"No series\"; series are not reported if there are no errors at all.\n",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 10,
+            "gradientMode": "hue",
+            "showPoints": "never"
+          }
+        }
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 8,
+        "x": 0,
+        "y": 14
+      },
+      "id": 12,
+      "interval": "5s",
+      "options": {
+        "legend": {
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "displayMode": "table"
+        }
+      },
+      "pluginVersion": "v11.0.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "expr": "sum by (type) (pilot_total_xds_rejects{cluster=\"$cluster\"})",
+          "legendFormat": "Rejected Config ({{type}})"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "expr": "pilot_total_xds_internal_errors{cluster=\"$cluster\"}",
+          "legendFormat": "Internal Errors"
+        }
+      ],
+      "title": "Push Errors",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Mixed --"
+      },
       "description": "Count of active and pending proxies managed by each instance.\nPending is expected to converge to zero.\n",
       "gridPos": {
         "h": 10,
-        "w": 12,
-        "x": 0,
+        "w": 8,
+        "x": 8,
         "y": 14
       },
       "id": 13,
@@ -779,8 +833,8 @@
       "description": "Size of each xDS push.\n",
       "gridPos": {
         "h": 10,
-        "w": 12,
-        "x": 12,
+        "w": 8,
+        "x": 16,
         "y": 14
       },
       "id": 14,
