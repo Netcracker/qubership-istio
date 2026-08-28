@@ -1,6 +1,6 @@
 ---
 name: istio-dashboard-adapter
-description: Adapt an upstream Istio Grafana dashboard for this distribution. Use when importing or updating istio-control-plane / ztunnel dashboards, adding resource-limit overlays, adding a cluster selector, or deciding whether an empty panel belongs here. Also the record of what already diverges from upstream.
+description: Adapt an upstream Istio Grafana dashboard for this distribution, and record what already diverges from it. Use when importing, updating or reviewing the istio-control-plane or ztunnel dashboard JSON in this repository.
 ---
 
 # Istio Dashboard Adapter
@@ -20,10 +20,9 @@ file.
 
 ### 1. Obtain the source dashboard
 
-- A URL - fetch it.
-- Pasted JSON - use it directly.
-- A repo file - read it (here they live under
-  `helm-templates/qubership-istio/dashboards`).
+In this repository they live under
+`helm-templates/qubership-istio/dashboards`. Steps 2 to 8 are the same
+whatever the JSON arrived from.
 
 ### 2. Identify the panels
 
@@ -37,7 +36,7 @@ Find panels by `title` (case-insensitive) or by inspecting
 
 From the existing targets, extract the `container` label value (e.g.
 `discovery`) and the `pod` regex pattern (e.g. `istiod-.*`). Reuse those
-same values in the limit queries — do not invent new ones.
+same values in the limit queries - do not invent new ones.
 
 ### 3. Apply the memory limit overlay
 
@@ -127,7 +126,7 @@ working on a single-cluster installation with no special case.
 Add the selector to every `expr` in the file, inside the existing label
 set, as the first matcher:
 
-```
+```promql
 sum by (pod) (container_memory_working_set_bytes{cluster="$cluster", container="discovery", pod=~"istiod-.*"})
 ```
 
@@ -157,7 +156,7 @@ It is deleted rather than left empty: an empty graph reads as "nothing is
 wrong", which is the opposite of what a metric that can never exist
 means.
 
-Restore this panel if a distribution ever ships sidecar mode.
+Restore this panel if this chart ever ships sidecar mode.
 
 #### Push Errors and Validation are kept - empty means healthy
 
@@ -172,11 +171,12 @@ not zero.
 | Validation | `galley_validation_passed`, `galley_validation_failed` | nobody has applied an Istio custom resource since istiod started |
 
 Do not conclude from an empty metrics endpoint that a metric was removed.
-The two Push Errors metrics are defined in `pkg/xds/monitoring.go` of
-Istio 1.30 - note the path, there is a second `monitoring.go` under
+The two Push Errors metrics are defined in `pkg/xds/monitoring.go` of the
+Istio source - note the path, there is a second `monitoring.go` under
 `pilot/pkg/xds/` that does not define them, and looking only there is how
-this panel gets mistaken for dead. `istio/istio#56105` reports exactly
-that mistake from the outside.
+this panel gets mistaken for dead. Check it in the source of the Istio
+version this chart pins rather than against a number written here.
+`istio/istio#56105` reports exactly that mistake from the outside.
 
 So both panels stay. Deleting a panel because the cluster is healthy
 would remove the one thing that shows the cluster stopping being healthy.
@@ -229,35 +229,29 @@ that stays flat until something goes wrong.
 |------------------------------|---------------|--------------|
 | Istio control plane (istiod) | `discovery`   | `istiod-.*`  |
 | Istio ztunnel                | `istio-proxy` | `ztunnel-.*` |
-| Generic k8s app              | app name      | `<app>-.*`   |
 
 Both Istio dashboards use the same `Memory Usage` / `CPU Usage` panel
 titles, so the panel-identification step holds across them; only the
-`container` / `pod` selectors differ. For the control-plane dashboard
-(grafana.com/api/dashboards/7645) the memory panel is id 4 and the CPU
-panel is id 6 — panel ids are not stable across dashboards, so match by
-title or `expr`, not by id.
+`container` / `pod` selectors differ. Match by title or `expr` and never
+by panel id - ids are not stable across dashboards.
 
 ## Common pitfalls
 
-- **Reusing an in-use `refId`** — overwrites an existing target. Always
+- **Reusing an in-use `refId`** - overwrites an existing target. Always
   pick the next unused letter and reference it in the override.
-- **Mismatched `container`/`pod` selectors** — the limit line will not
+- **Mismatched `container`/`pod` selectors** - the limit line will not
   align with the usage series. Copy the labels from the panel's own
   existing target rather than guessing.
-- **Forgetting the override** — without the `byFrameRefID` entry the
+- **Forgetting the override** - without the `byFrameRefID` entry the
   limit series renders as a filled area like the usage series instead of
   a thin red reference line.
-- **Re-importing from a newer Istio release and keeping the result.** An
-  import returns all three adaptations to upstream: the limit targets go,
-  every `cluster="$cluster"` goes, and the removed panel comes back.
-  Diff the import against the file in the repo before committing it.
-- **Leaving one query without the cluster selector.** That panel ignores
-  the dropdown and shows another cluster's data next to panels that
-  honour it, with nothing reporting an error.
+- **Re-importing from a newer Istio release and keeping the result.** The
+  import reverts all three adaptations at once. Diff it against the file
+  in the repo before committing.
+- **Leaving one query without the cluster selector.** That panel silently
+  shows another cluster. Count the matchers against the `expr` fields.
 - **Deleting a panel and leaving the hole.** Grafana does not reflow the
-  row; the remaining panels must be widened by hand.
-- **Reading an absent metric as a removed one.** Istio registers counters
-  lazily, so a counter for an event that never happened is missing from
-  the metrics endpoint entirely. Check the source before concluding a
-  panel is dead - and check every `monitoring.go`, not the first one found.
+  row; widen the survivors by hand.
+- **Reading an absent metric as a removed one.** Counters register lazily,
+  so a metric for an event that never happened is simply missing. Check
+  the source, and every `monitoring.go`, not the first one found.
