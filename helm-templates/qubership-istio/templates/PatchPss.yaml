@@ -118,7 +118,7 @@ spec:
         {{- toYaml .Values.patchPss.podSecurityContext | nindent 8 }}
       containers:
         - name: patch-pss
-          image: {{ .Values.patchPss.image | quote }}
+          image: {{ include "qubership-istio.patchPss.image" . | quote }}
           imagePullPolicy: {{ .Values.patchPss.imagePullPolicy }}
           env:
             - name: NAMESPACE

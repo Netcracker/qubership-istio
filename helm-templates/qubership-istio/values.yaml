@@ -175,9 +175,23 @@ monitoring:
 ENABLE_PRIVILEGED_PSS: false
 
 patchPss:
-  # kubectl image for the patch Job. Not derived from global.hub, which is the
-  # *Istio* image hub (<hub>/pilot:<tag>) — this is not an Istio image.
-  image: ghcr.io/netcracker/qubership-docker-kubectl:main
+  # kubectl image for the patch Job.
+  #
+  # Split into parts so a private-registry installation can redirect the
+  # registry alone and keep the rest. It is not an Istio image and does not
+  # live under global.hub, which is the Istio hub (<hub>/pilot:<tag>) - so
+  # whatever redirects the Istio images has to redirect this one too. It is a
+  # pre-install hook: an image that cannot be pulled fails the whole release
+  # before a single Istio manifest is applied.
+  #
+  # The tag is a released one on purpose. A floating tag with
+  # imagePullPolicy: IfNotPresent leaves a node on whatever it happened to
+  # pull first, and different nodes then run different versions.
+  image:
+    registry: ghcr.io
+    repository: netcracker/qubership-docker-kubectl
+    tag: 0.0.9
+    # digest: sha256:...   # when set, used instead of tag
   imagePullPolicy: IfNotPresent
 
   resources:
