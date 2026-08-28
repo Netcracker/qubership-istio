@@ -52,6 +52,7 @@ Restart existing workloads after labeling.
 When `MONITORING_ENABLED=true` (default), the chart deploys:
 - `ServiceMonitor` for istiod
 - `PodMonitor` for ztunnel
+- `PodMonitor` for istio-cni-node, which has no Service of its own to scrape through
 - Two Grafana dashboards (control plane + ztunnel) via `GrafanaDashboard` CRs
 
 ## Transfer Image
