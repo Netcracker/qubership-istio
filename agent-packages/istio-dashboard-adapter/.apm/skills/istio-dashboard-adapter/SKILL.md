@@ -1,6 +1,6 @@
 ---
 name: istio-dashboard-adapter
-description: Adapt an upstream Istio Grafana dashboard for this distribution. Use when importing or updating istio-control-plane / ztunnel dashboards, adding resource-limit overlays, adding a cluster selector, or deciding whether a panel belongs here. Also the record of what already diverges from upstream.
+description: Adapt an upstream Istio Grafana dashboard for this distribution. Use when importing or updating istio-control-plane / ztunnel dashboards, adding resource-limit overlays, adding a cluster selector, or deciding whether an empty panel belongs here. Also the record of what already diverges from upstream.
 ---
 
 # Istio Dashboard Adapter
@@ -14,7 +14,7 @@ things are done to them here, and nothing else.
 |---|---|---|
 | A | resource-limit overlays | usage without its limit does not say whether a pod is close to eviction |
 | B | cluster selector | one Grafana serves several clusters through a federating proxy |
-| C | two panels removed | their metrics are never produced by this distribution |
+| C | one panel removed | its metric is never produced by this distribution; two others look empty for reasons worth knowing |
 
 **Read this before re-importing a dashboard from a newer Istio
 release.** An import overwrites all three, and B touches every query in
@@ -168,14 +168,31 @@ equals the count of `expr` fields, and that `cluster=~` appears nowhere.
 
 ---
 
-## C. Panels that are removed
+## C. Panels: one removed, two kept for different reasons
 
-This distribution runs **ambient** mesh only, and two upstream panels
-can never fill here. They are deleted rather than left empty: an empty
-graph reads as "nothing is wrong", which is the opposite of what an
-absent metric means.
+Three panels on the control-plane dashboard show nothing here, and the
+reasons differ. Only one of them is deleted.
 
-### C.1 Push Errors - the metrics no longer exist
+### C.1 Injection is removed - ambient never injects a sidecar
+
+`sidecar_injection_success_total` and `sidecar_injection_failure_total`
+are current metric names and they work - but only the sidecar injection
+webhook ever records them. This distribution runs **ambient** mesh only,
+so no sidecar is ever injected and the counters are never created.
+
+It is deleted rather than left empty: an empty graph reads as "nothing
+is wrong", which is the opposite of what a metric that can never exist
+means.
+
+Restore this panel if a distribution ever ships sidecar mode.
+
+### C.2 Closing the layout after a removal
+
+Removing a panel leaves a hole; the row does not reflow by itself.
+Injection shared a row with Validation at `w: 12`, so Validation becomes
+`w: 24`.
+
+### C.3 Push Errors is kept, although it cannot fill either
 
 Upstream queries `pilot_total_xds_rejects` and
 `pilot_total_xds_internal_errors`. Neither is defined in Istio 1.30:
@@ -183,29 +200,16 @@ they are absent from `pilot/pkg/xds/monitoring.go`, and a running istiod
 exposes neither among its metrics. `pilot_xds_pushes` carries only
 success types - `cds`, `eds`, `lds`, `rds`, `wads`, `wds`.
 
-This is an upstream defect the dashboard inherited, not a local one. No
-cluster state fills this panel, so it goes.
+**This is an upstream defect, not a local one.** The dashboard shipped by
+Istio itself queries the same two metrics. Deleting the panel here would
+fix the symptom in a fork and leave the cause upstream, and every later
+import would have to remember to delete it again.
 
-### C.2 Injection - ambient never injects a sidecar
+So it stays as upstream has it, and the fix is expected to come from
+upstream. Track the issue there; when the panel is corrected upstream, an
+import brings the correction with it and this note goes away.
 
-`sidecar_injection_success_total` and `sidecar_injection_failure_total`
-are current metric names and they work - but only the sidecar injection
-webhook ever records them. Ambient has no sidecar, so the counters are
-never created here.
-
-Keep this panel if a distribution ever ships sidecar mode.
-
-### C.3 Closing the layout
-
-Removing a panel leaves a hole; the row does not reflow by itself. Widen
-what remains to fill the row:
-
-- **Push Errors** stood first in a row of three at `w: 8`. The remaining
-  two become `w: 12` at `x: 0` and `x: 12`.
-- **Injection** shared a row with Validation at `w: 12`. Validation
-  becomes `w: 24`.
-
-### C.4 Validation stays, and here is why it looks empty
+### C.4 Validation is kept, and here is why it looks empty
 
 `galley_validation_passed` and `galley_validation_failed` are current,
 and they do fire under ambient: the validating webhook checks Istio
@@ -260,12 +264,13 @@ title or `expr`, not by id.
   a thin red reference line.
 - **Re-importing from a newer Istio release and keeping the result.** An
   import returns all three adaptations to upstream: the limit targets go,
-  every `cluster="$cluster"` goes, and the two removed panels come back.
+  every `cluster="$cluster"` goes, and the removed panel comes back.
   Diff the import against the file in the repo before committing it.
 - **Leaving one query without the cluster selector.** That panel ignores
   the dropdown and shows another cluster's data next to panels that
   honour it, with nothing reporting an error.
 - **Deleting a panel and leaving the hole.** Grafana does not reflow the
   row; the remaining panels must be widened by hand.
-- **Reading an empty panel as healthy.** That is why Push Errors and
-  Injection were deleted rather than left in place.
+- **Reading an empty panel as healthy.** That is why Injection was
+  deleted. Push Errors is empty for the same reason and is kept anyway -
+  see C.3, the difference is whose defect it is.

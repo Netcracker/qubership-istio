@@ -12,8 +12,9 @@ upstream Istio's `pilot-dashboard.gen.json` and
   red reference line;
 - **a cluster selector** — a `cluster` variable and a `cluster="$cluster"`
   matcher on every query, for a Grafana that serves several clusters;
-- **two panels removed** — `Push Errors`, whose metrics no longer exist
-  in Istio, and `Injection`, which only ever fills under sidecar mode.
+- **one panel removed** — `Injection`, which only ever fills under sidecar
+  mode; `Push Errors` is left as upstream has it, although its metrics no
+  longer exist in Istio, because that defect belongs upstream.
 
 ## Install
 
@@ -45,5 +46,5 @@ give it a dashboard URL, a repo file path, or pasted JSON.
 On a version bump. Importing a dashboard from a newer Istio release
 silently reverts all three adaptations at once, and the loss is easy to
 miss: the dashboard still renders, it just stops showing limits, stops
-honouring the cluster selector, and grows back two panels that can never
+honouring the cluster selector, and grows back the panel that can never
 fill. Read the skill before the import, and diff after it.
