@@ -16,7 +16,10 @@
 */ -}}
 {{- define "qubership-istio.patchPss.image" -}}
 {{- $image := .Values.patchPss.image -}}
-{{- $ref := printf "%s/%s" $image.registry $image.repository -}}
+{{- $ref := $image.repository -}}
+{{- if $image.registry -}}
+{{- $ref = printf "%s/%s" $image.registry $image.repository -}}
+{{- end -}}
 {{- if $image.digest -}}
 {{- printf "%s@%s" $ref $image.digest -}}
 {{- else -}}

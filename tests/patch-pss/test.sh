@@ -3,6 +3,7 @@ set -eux
 
 # Verifies the pre-deploy Pod Security Standards patch (templates/PatchPss.yaml):
 #   - nothing is rendered while ENABLE_PRIVILEGED_PSS is off (the default);
+#   - the image is assembled from parts and an empty registry drops the slash;
 #   - the rendered Job is PSS "restricted"-compliant and the Role is scoped to
 #     this namespace by resourceNames;
 #   - global.imagePullSecrets, an Istio-convention list of bare names, reaches the
@@ -118,6 +119,11 @@ echo "${DEFAULT_IMAGE}" | grep -qE '^ghcr\.io/netcracker/qubership-docker-kubect
 REDIRECTED="$(image_of --set patchPss.image.registry=private.example.com:5000)"
 if [ "${REDIRECTED}" != "private.example.com:5000/netcracker/qubership-docker-kubectl:${DEFAULT_IMAGE##*:}" ]; then
   fail "redirecting the registry alone did not keep repository and tag: ${REDIRECTED}"
+fi
+
+UNQUALIFIED="$(image_of --set patchPss.image.registry=)"
+if [ "${UNQUALIFIED}" != "netcracker/qubership-docker-kubectl:${DEFAULT_IMAGE##*:}" ]; then
+  fail "an empty registry did not drop the separator: ${UNQUALIFIED}"
 fi
 
 BY_DIGEST="$(image_of --set patchPss.image.digest=sha256:0123456789abcdef)"
