@@ -57,13 +57,15 @@ It requires the following cluster rights for deployment user:
     - istio-system
 ```
 
-The property runs a pre-install hook Job with the `kubectl` image from `patchPss.image`.
-Override it when the default registry is not reachable from the cluster:
+The property runs a pre-install hook Job with the `kubectl` image assembled from
+`patchPss.image`. Redirect the registry alone when the default one is not
+reachable from the cluster; the repository and the tag stay as they are:
 
 ```yaml
 qubership-istio:
   patchPss:
-    image: <registry>/qubership-docker-kubectl:<tag>
+    image:
+      registry: <registry>
 ```
 
 
@@ -105,7 +107,10 @@ Recommended for deployments with high workload and large amount of data.
 |-------------------|-------|---------|-------------|--------------------------------------------------------------------------------------------|
 |MONITORING_ENABLED |boolean|no       |true         |Flag to install custom resources (PodMonitor and grafana dashboard) for prometheus monitoring|
 |ENABLE_PRIVILEGED_PSS|boolean|no     |false        |Label the release namespace `pod-security.kubernetes.io/enforce=privileged` from a pre-install/pre-upgrade hook Job, for clusters where Pod Security Admission would otherwise reject the Ambient Mesh pods. Needs `get` and `patch` on the namespace|
-|patchPss.image     |string |no       |`ghcr.io/netcracker/qubership-docker-kubectl:main`|kubectl image used by the PSS patch Job. Not an Istio image, so it is not derived from `global.hub`|
+|patchPss.image.registry|string|no    |`ghcr.io`    |Registry the PSS patch Job image is pulled from. Redirect this alone for a private registry. Leave it empty to pull the repository unqualified|
+|patchPss.image.repository|string|no  |`netcracker/qubership-docker-kubectl`|Repository of the kubectl image used by the PSS patch Job. Not an Istio image, so it is not derived from `global.hub`|
+|patchPss.image.tag |string |no       |`0.0.9`      |Tag of that image. Used only when `patchPss.image.digest` is unset|
+|patchPss.image.digest|string|no      |unset        |Digest of that image (`sha256:...`). When set, the image is pinned by digest and the tag is ignored|
 |patchPss.imagePullPolicy|string|no   |IfNotPresent |Image pull policy for the PSS patch Job                                                     |
 |patchPss.resources |object |no       |75m/75Mi requests, 150m/150Mi limits|Resources for the PSS patch Job container                                          |
 |patchPss.podSecurityContext|object|no|`runAsNonRoot: true`, `runAsUser: 1001`, `seccompProfile.type: RuntimeDefault`|Pod security context of the PSS patch Job. Must stay compliant with the policy currently enforced on the namespace, otherwise the Job cannot be admitted in order to relax it|
