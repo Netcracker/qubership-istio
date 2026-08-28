@@ -83,8 +83,14 @@ fi
 kubectl apply --dry-run=server -f "${RENDER_DIR}/pull-secrets.yaml" \
   || fail "the apiserver refused the rendered patch-pss manifests"
 
-# Unset stays unset: an empty imagePullSecrets list is rejected as well.
-if grep -q "imagePullSecrets" "${RENDER_DIR}/on.yaml"; then
+# Unset stays unset: an empty imagePullSecrets list is rejected as well. Rendered on
+# its own, because the full chart carries the word in Istio's own injector template.
+helm template "${HELM_RELEASE}" "${HELM_CHART_PATH}" \
+  --namespace "${ISTIO_NAMESPACE}" \
+  --set MONITORING_ENABLED=false \
+  --set ENABLE_PRIVILEGED_PSS=true \
+  --show-only templates/PatchPss.yaml > "${RENDER_DIR}/no-pull-secrets.yaml"
+if grep -q "imagePullSecrets" "${RENDER_DIR}/no-pull-secrets.yaml"; then
   fail "imagePullSecrets rendered although global.imagePullSecrets is not set"
 fi
 echo "OK: imagePullSecrets are named references, and absent when unset"
