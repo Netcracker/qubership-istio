@@ -25,7 +25,7 @@ helm upgrade --install qubership-istio helm-templates/qubership-istio \
 
 Install in `istio-system` only — one instance per cluster.
 
-If the cluster enforces Pod Security Admission on `istio-system`, add `--set ENABLE_PRIVILEGED_PSS=true` so a pre-install hook labels the namespace `pod-security.kubernetes.io/enforce=privileged` — ambient mode's `istio-cni` and `ztunnel` DaemonSets need privileged pods. See [Pod Security Admission](docs/public/installation.md#pod-security-admission).
+A pre-install hook labels `istio-system` `pod-security.kubernetes.io/enforce=privileged` by default, for clusters that enforce Pod Security Admission — ambient mode's `istio-cni` and `ztunnel` DaemonSets need privileged pods. See [Pod Security Admission](docs/public/installation.md#pod-security-admission).
 
 **Enroll a namespace into the ambient mesh:**
 
@@ -44,7 +44,7 @@ Restart existing workloads after labeling.
 | `global.profile` | `ambient` | Mesh profile |
 | `global.hub` / `tag` | — | Image registry override |
 | `MONITORING_ENABLED` | `true` | Deploy ServiceMonitor, PodMonitor, GrafanaDashboards |
-| `ENABLE_PRIVILEGED_PSS` | `false` | Pre-install hook Job labels the release namespace `pod-security.kubernetes.io/enforce=privileged` (needed on Pod-Security-Admission clusters) |
+| `ENABLE_PRIVILEGED_PSS` | `true` | Pre-install hook Job labels the release namespace `pod-security.kubernetes.io/enforce=privileged` (needed on Pod-Security-Admission clusters) |
 | `monitoring.scrapeInterval` | `15s` | Prometheus scrape interval |
 | `istiod.*`, `ztunnel.*`, `cni.*` | see `values.yaml` | Pass any upstream Istio values under the subchart key |
 

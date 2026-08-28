@@ -46,7 +46,7 @@ It can be performed with the following command:
 kubectl label --overwrite ns istio-system pod-security.kubernetes.io/enforce=privileged
 ```
 
-This command can be executed automatically with property `ENABLE_PRIVILEGED_PSS: true` in deployment parameters.
+This is what the chart does by default: `ENABLE_PRIVILEGED_PSS` is `true`, and a pre-install hook Job applies the label. Set it to `false` to opt out and label the namespace yourself.
 It requires the following cluster rights for deployment user:
 
 ```yaml
@@ -106,7 +106,7 @@ Recommended for deployments with high workload and large amount of data.
 |Parameter          |Type   |Mandatory|Default value|Description                                                                                 |
 |-------------------|-------|---------|-------------|--------------------------------------------------------------------------------------------|
 |MONITORING_ENABLED |boolean|no       |true         |Flag to install custom resources (PodMonitor and grafana dashboard) for prometheus monitoring|
-|ENABLE_PRIVILEGED_PSS|boolean|no     |false        |Label the release namespace `pod-security.kubernetes.io/enforce=privileged` from a pre-install/pre-upgrade hook Job, for clusters where Pod Security Admission would otherwise reject the Ambient Mesh pods. Needs `get` and `patch` on the namespace|
+|ENABLE_PRIVILEGED_PSS|boolean|no     |true         |Label the release namespace `pod-security.kubernetes.io/enforce=privileged` from a pre-install/pre-upgrade hook Job, for clusters where Pod Security Admission would otherwise reject the Ambient Mesh pods. Needs `get` and `patch` on the namespace|
 |patchPss.image.registry|string|no    |`ghcr.io`    |Registry the PSS patch Job image is pulled from. Redirect this alone for a private registry. Leave it empty to pull the repository unqualified|
 |patchPss.image.repository|string|no  |`netcracker/qubership-docker-kubectl`|Repository of the kubectl image used by the PSS patch Job. Not an Istio image, so it is not derived from `global.hub`|
 |patchPss.image.tag |string |no       |`0.0.9`      |Tag of that image. Used only when `patchPss.image.digest` is unset|

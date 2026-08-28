@@ -2,7 +2,7 @@
 set -eux
 
 # Verifies the pre-deploy Pod Security Standards patch (templates/PatchPss.yaml):
-#   - nothing is rendered while ENABLE_PRIVILEGED_PSS is off (the default);
+#   - nothing is rendered while ENABLE_PRIVILEGED_PSS is off;
 #   - the image is assembled from parts and an empty registry drops the slash;
 #   - the rendered Job is PSS "restricted"-compliant and the Role is scoped to
 #     this namespace by resourceNames;
@@ -39,14 +39,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# --- 1. Off by default: no patch-pss resources rendered ---
+# --- 1. Switched off: no patch-pss resources rendered ---
 helm template "${HELM_RELEASE}" "${HELM_CHART_PATH}" \
   --namespace "${ISTIO_NAMESPACE}" \
-  --set MONITORING_ENABLED=false > "${RENDER_DIR}/off.yaml"
+  --set MONITORING_ENABLED=false \
+  --set ENABLE_PRIVILEGED_PSS=false > "${RENDER_DIR}/off.yaml"
 if grep -q "istio-patch-pss" "${RENDER_DIR}/off.yaml"; then
   fail "patch-pss resources rendered although ENABLE_PRIVILEGED_PSS is off"
 fi
-echo "OK: no patch-pss resources rendered by default"
+echo "OK: no patch-pss resources rendered when switched off"
 
 # --- 2. Rendered manifests: restricted-compliant Job, namespace-scoped Role ---
 helm template "${HELM_RELEASE}" "${HELM_CHART_PATH}" \

@@ -172,7 +172,7 @@ monitoring:
 # pod-security.kubernetes.io/enforce=privileged before Istio is installed.
 # Opt-in: it is a no-op without PSA, and namespace security labels are usually
 # owned by the cluster administrator. The label is NOT removed on uninstall.
-ENABLE_PRIVILEGED_PSS: false
+ENABLE_PRIVILEGED_PSS: true
 
 patchPss:
   # kubectl image for the patch Job.
