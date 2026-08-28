@@ -8,34 +8,24 @@ description: Adapt an upstream Istio Grafana dashboard for this distribution. Us
 The dashboards in `helm-templates/qubership-istio/dashboards` start life
 as the upstream Istio ones - `pilot-dashboard.gen.json` and
 `ztunnel-dashboard.gen.json` from `manifests/addons/dashboards`. Three
-things are done to them here, and nothing else.
+things are done to them here and nothing else: the resource-limit
+overlays of steps 3 and 4, the cluster selector of steps 5 and 6, and the
+one panel removed in step 7.
 
-| | Adaptation | Why |
-|---|---|---|
-| A | resource-limit overlays | usage without its limit does not say whether a pod is close to eviction |
-| B | cluster selector | one Grafana serves several clusters through a federating proxy |
-| C | one panel removed | its metric is never produced by this distribution; two others look empty for reasons worth knowing |
+**Read this before re-importing a dashboard from a newer Istio release.**
+An import overwrites all three, and step 6 touches every query in the
+file.
 
-**Read this before re-importing a dashboard from a newer Istio
-release.** An import overwrites all three, and B touches every query in
-the file.
+## Process
 
----
-
-## A. Resource-limit overlays
-
-Add a `kube_pod_container_resource_limits` target to the **Memory
-Usage** and **CPU Usage** panels, styled as a red, unfilled reference
-line.
-
-### A.1 Obtain the source dashboard
+### 1. Obtain the source dashboard
 
 - A URL - fetch it.
 - Pasted JSON - use it directly.
 - A repo file - read it (here they live under
   `helm-templates/qubership-istio/dashboards`).
 
-### A.2 Identify the panels
+### 2. Identify the panels
 
 Find panels by `title` (case-insensitive) or by inspecting
 `targets[].expr`:
@@ -49,7 +39,7 @@ From the existing targets, extract the `container` label value (e.g.
 `discovery`) and the `pod` regex pattern (e.g. `istiod-.*`). Reuse those
 same values in the limit queries — do not invent new ones.
 
-### A.3 Apply the memory limit overlay
+### 3. Apply the memory limit overlay
 
 Add to `targets[]` of the memory panel, using the next unused `refId`:
 
@@ -77,7 +67,7 @@ you used):
 }
 ```
 
-### A.4 Apply the CPU limit overlay
+### 4. Apply the CPU limit overlay
 
 Reuse the same target and override shape on the CPU panel, changing only:
 
@@ -89,23 +79,7 @@ Reuse the same target and override shape on the CPU panel, changing only:
 The red-line override properties (`lineWidth`, `fillOpacity`, `color`)
 are identical to the memory override.
 
-### A.5 Preserve everything else
-
-Within this adaptation, do not touch any other panel or the top-level
-fields `uid`, `title`, `schemaVersion`, `time`, `refresh`, `__inputs`,
-`__requires`. The only changes are the two added targets and their two
-overrides. `templating` belongs to adaptation B and is not touched
-here.
-
----
-
-## B. Cluster selector
-
-One Grafana serves several clusters, federated by a proxy that stamps a
-`cluster` label onto the series it forwards. The dashboards need a
-selector for it, and every query has to honour the selection.
-
-### B.1 The variable
+### 5. Add the cluster variable
 
 Replace the `cluster` entry of `templating.list`, or add it, with
 exactly this. It is the shape the other dashboards in this Grafana use,
@@ -148,7 +122,7 @@ variable resolves to `""`. That is deliberate: in PromQL `cluster=""`
 matches series that carry no `cluster` label at all, so the panels keep
 working on a single-cluster installation with no special case.
 
-### B.2 Every query
+### 6. Put the cluster selector on every query
 
 Add the selector to every `expr` in the file, inside the existing label
 set, as the first matcher:
@@ -166,76 +140,88 @@ show another cluster's data while the rest of the dashboard shows the
 selected one. After editing, assert that the count of `cluster="$cluster"`
 equals the count of `expr` fields, and that `cluster=~` appears nowhere.
 
----
+### 7. Decide which panels belong
 
-## C. Panels: one removed, two kept for different reasons
+Three panels on the control-plane dashboard usually show nothing. Only
+one of them is deleted, and the difference is worth understanding before
+touching any of them.
 
-Three panels on the control-plane dashboard show nothing here, and the
-reasons differ. Only one of them is deleted.
-
-### C.1 Injection is removed - ambient never injects a sidecar
+#### Injection is removed - ambient never injects a sidecar
 
 `sidecar_injection_success_total` and `sidecar_injection_failure_total`
 are current metric names and they work - but only the sidecar injection
 webhook ever records them. This distribution runs **ambient** mesh only,
-so no sidecar is ever injected and the counters are never created.
+so no sidecar is ever injected and the counters can never be created.
 
-It is deleted rather than left empty: an empty graph reads as "nothing
-is wrong", which is the opposite of what a metric that can never exist
+It is deleted rather than left empty: an empty graph reads as "nothing is
+wrong", which is the opposite of what a metric that can never exist
 means.
 
 Restore this panel if a distribution ever ships sidecar mode.
 
-### C.2 Closing the layout after a removal
+#### Push Errors and Validation are kept - empty means healthy
+
+Both look broken and are not. Istio registers a counter **lazily**: it
+does not appear on the metrics endpoint until something increments it for
+the first time. A counter for an event that has not happened is absent,
+not zero.
+
+| Panel | Metrics | Absent because |
+|---|---|---|
+| Push Errors | `pilot_total_xds_rejects`, `pilot_total_xds_internal_errors` | no proxy has rejected a push, and istiod has hit no internal error |
+| Validation | `galley_validation_passed`, `galley_validation_failed` | nobody has applied an Istio custom resource since istiod started |
+
+Do not conclude from an empty metrics endpoint that a metric was removed.
+The two Push Errors metrics are defined in `pkg/xds/monitoring.go` of
+Istio 1.30 - note the path, there is a second `monitoring.go` under
+`pilot/pkg/xds/` that does not define them, and looking only there is how
+this panel gets mistaken for dead. `istio/istio#56105` reports exactly
+that mistake from the outside.
+
+So both panels stay. Deleting a panel because the cluster is healthy
+would remove the one thing that shows the cluster stopping being healthy.
+
+#### Closing the layout after a removal
 
 Removing a panel leaves a hole; the row does not reflow by itself.
 Injection shared a row with Validation at `w: 12`, so Validation becomes
 `w: 24`.
 
-### C.3 Push Errors is kept, although it cannot fill either
+### 8. Preserve everything else
 
-Upstream queries `pilot_total_xds_rejects` and
-`pilot_total_xds_internal_errors`. Neither is defined in Istio 1.30:
-they are absent from `pilot/pkg/xds/monitoring.go`, and a running istiod
-exposes neither among its metrics. `pilot_xds_pushes` carries only
-success types - `cds`, `eds`, `lds`, `rds`, `wads`, `wds`.
+Steps 3 to 7 are the whole diff. Nothing else in the file changes: not
+the remaining panels, not their queries beyond the cluster matcher, and
+not the top-level fields `uid`, `title`, `schemaVersion`, `time`,
+`refresh`, `__inputs`, `__requires`.
 
-**This is an upstream defect, not a local one.** The dashboard shipped by
-Istio itself queries the same two metrics. Deleting the panel here would
-fix the symptom in a fork and leave the cause upstream, and every later
-import would have to remember to delete it again.
+Diff the result against the source before committing it. An adaptation
+that touched a panel it had no business touching is the kind of thing
+that survives review and surfaces months later, when somebody wonders
+why this dashboard drifted from upstream in a place nobody decided on.
 
-So it stays as upstream has it, and the fix is expected to come from
-upstream. Track the issue there; when the panel is corrected upstream, an
-import brings the correction with it and this note goes away.
+## Filling an empty panel on demand
 
-### C.4 Validation is kept, and here is why it looks empty
+For a demo or a screenshot, both can be filled without leaving anything
+behind in the cluster.
 
-`galley_validation_passed` and `galley_validation_failed` are current,
-and they do fire under ambient: the validating webhook checks Istio
-custom resources whatever the data plane is.
+**Validation.** The webhook server records a pass on a dry run but
+returns early on a failed dry run, so the two lines need different
+commands:
 
-They are absent until the first admission request, because Istio
-registers these counters lazily. So on a quiet cluster the panel is
-empty and that is correct - nobody has applied an Istio resource since
-istiod started. It fills the moment somebody does.
-
-To make it show data on demand, note the asymmetry in the webhook
-server: `reportValidationPass` records on a dry run too, while
-`reportValidationFailed` returns early when the request is a dry run.
-
-- **Success line** - `kubectl apply --dry-run=server` any valid Istio
-  resource. Nothing is created and the counter appears.
-- **Failure line** - a real `kubectl apply` of a resource that passes
-  CRD schema validation but fails Istio's own, for instance a `Sidecar`
-  whose `egress.hosts` entry is not in `namespace/host` form. The
-  webhook rejects it, so nothing is created either, and the counter
-  appears.
+- **Success** - `kubectl apply --dry-run=server` any valid Istio resource.
+  The request goes through admission and is then discarded, so nothing is
+  created and the counter still moves.
+- **Failure** - a real `kubectl apply` of a resource that passes CRD
+  schema validation but fails Istio's own, for instance a `Sidecar` whose
+  `egress.hosts` entry is not in `namespace/host` form. The webhook
+  rejects it, so nothing is created either.
 
 A schema-invalid resource does not reach the webhook at all and moves
 neither counter.
 
----
+**Push Errors** cannot be triggered as safely: it needs a proxy to reject
+a real config push. Leave it alone and read it for what it is - the panel
+that stays flat until something goes wrong.
 
 ## Reference values
 
@@ -271,6 +257,7 @@ title or `expr`, not by id.
   honour it, with nothing reporting an error.
 - **Deleting a panel and leaving the hole.** Grafana does not reflow the
   row; the remaining panels must be widened by hand.
-- **Reading an empty panel as healthy.** That is why Injection was
-  deleted. Push Errors is empty for the same reason and is kept anyway -
-  see C.3, the difference is whose defect it is.
+- **Reading an absent metric as a removed one.** Istio registers counters
+  lazily, so a counter for an event that never happened is missing from
+  the metrics endpoint entirely. Check the source before concluding a
+  panel is dead - and check every `monitoring.go`, not the first one found.

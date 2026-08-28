@@ -1,4 +1,4 @@
 name: istio-dashboard-adapter
-version: 1.0.0
-description: Adapts the upstream Istio Grafana dashboards for this distribution - resource-limit overlays, a cluster selector on every query, and the removal of the one panel whose metric this distribution never produces.
+version: "1.0.0"
+description: Adapts the upstream Istio Grafana dashboards for this distribution - resource-limit overlays, a cluster selector on every query, and the removal of the one panel whose metric ambient mode never produces.
 author: Qubership

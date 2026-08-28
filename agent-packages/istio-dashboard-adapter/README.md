@@ -13,8 +13,8 @@ upstream Istio's `pilot-dashboard.gen.json` and
 - **a cluster selector** — a `cluster` variable and a `cluster="$cluster"`
   matcher on every query, for a Grafana that serves several clusters;
 - **one panel removed** — `Injection`, which only ever fills under sidecar
-  mode; `Push Errors` is left as upstream has it, although its metrics no
-  longer exist in Istio, because that defect belongs upstream.
+  mode. `Push Errors` and `Validation` stay: they look broken but are not,
+  and the skill explains why an empty one means a healthy cluster.
 
 ## Install
 
