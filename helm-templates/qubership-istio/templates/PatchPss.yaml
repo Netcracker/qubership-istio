@@ -15,10 +15,14 @@ metadata:
     "helm.sh/hook": pre-install,pre-upgrade
     "helm.sh/hook-weight": "0"
     "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
-{{- /* Undefined at parent level unless the operator sets it; an empty list is rejected. */}}
+{{- /* Istio convention: a list of bare secret names, not LocalObjectReference objects, so
+     each one is wrapped here - the core/v1 API rejects a plain string at decode. `with`
+     skips both an unset value and an empty list, which the API rejects too. */}}
 {{- with .Values.global.imagePullSecrets }}
 imagePullSecrets:
-{{- toYaml . | nindent 2 }}
+{{- range . }}
+  - name: {{ . }}
+{{- end }}
 {{- end }}
 ---
 # A namespaced Role can authorize the namespace object itself: the apiserver sets the

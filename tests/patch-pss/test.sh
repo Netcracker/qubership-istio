@@ -5,6 +5,8 @@ set -eux
 #   - nothing is rendered while ENABLE_PRIVILEGED_PSS is off (the default);
 #   - the rendered Job is PSS "restricted"-compliant and the Role is scoped to
 #     this namespace by resourceNames;
+#   - global.imagePullSecrets, an Istio-convention list of bare names, reaches the
+#     ServiceAccount in the shape the core/v1 API accepts;
 #   - on a namespace that really enforces "restricted", the hook admits its own
 #     pod and flips the label to privileged (the chicken-and-egg guarantee, and
 #     the only check that cannot be made from rendered YAML);
@@ -58,6 +60,34 @@ for kind in ServiceAccount Role RoleBinding Job; do
   fi
 done
 echo "OK: all four patch-pss resources are rendered"
+
+# --- 2a. imagePullSecrets: Istio passes bare names, the API wants objects ---
+# global.imagePullSecrets is an Istio convention and holds plain strings, while
+# ServiceAccount.imagePullSecrets is []LocalObjectReference. Emitting the list
+# as-is renders valid YAML that the apiserver rejects at decode, so the shape is
+# checked here and the decode itself by a server dry-run.
+helm template "${HELM_RELEASE}" "${HELM_CHART_PATH}" \
+  --namespace "${ISTIO_NAMESPACE}" \
+  --set MONITORING_ENABLED=false \
+  --set ENABLE_PRIVILEGED_PSS=true \
+  --set "global.imagePullSecrets={first-secret,second-secret}" \
+  --show-only templates/PatchPss.yaml > "${RENDER_DIR}/pull-secrets.yaml"
+
+PULL_SECRET_NAMES="$(yq e -N \
+  'select(.kind == "ServiceAccount") | .imagePullSecrets[].name' \
+  "${RENDER_DIR}/pull-secrets.yaml" | tr '\n' ',')"
+if [ "${PULL_SECRET_NAMES}" != "first-secret,second-secret," ]; then
+  fail "expected imagePullSecrets named first-secret,second-secret, got '${PULL_SECRET_NAMES}'"
+fi
+
+kubectl apply --dry-run=server -f "${RENDER_DIR}/pull-secrets.yaml" \
+  || fail "the apiserver refused the rendered patch-pss manifests"
+
+# Unset stays unset: an empty imagePullSecrets list is rejected as well.
+if grep -q "imagePullSecrets" "${RENDER_DIR}/on.yaml"; then
+  fail "imagePullSecrets rendered although global.imagePullSecrets is not set"
+fi
+echo "OK: imagePullSecrets are named references, and absent when unset"
 
 JOB="$(yq e -N 'select(.kind == "Job" and .metadata.name == "istio-patch-pss")' "${RENDER_DIR}/on.yaml")"
 if [ "$(echo "${JOB}" | yq e '.spec.template.spec.securityContext.runAsNonRoot')" != "true" ]; then
