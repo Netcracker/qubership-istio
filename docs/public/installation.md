@@ -2,6 +2,7 @@
 - [Prerequisites](#prerequisites)
   - [Common](#common)
   - [Kubernetes](#kubernetes)
+    - [Pod Security Admission](#pod-security-admission)
 - [Best practices and recommendations](#best-practices-and-recommendations)
   - [HWE](#hwe)
 - [Parameters](#parameters)
@@ -33,6 +34,40 @@ Qubership Istio should be installed under the service account with cluster-admin
 Supported k8s versions: 1.31, 1.32, 1.33, 1.34, 1.35.
 
 Kubernetes Gateway API CRDs are not included into this distro - they should be preinstalled on the cluster.
+
+### Pod Security Admission
+Istio Ambient Mesh requires privileged pods: `istio-cni` and `ztunnel` need `hostNetwork` together with the `NET_ADMIN` and `SYS_ADMIN` capabilities.
+If Pod Security Admission enforces `baseline` or `restricted` on `istio-system`, both DaemonSets are created but their pods are rejected at admission.
+To be able to install the distro you need to provide `privileged` policy to `istio-system` namespace as prerequisite step.
+
+It can be performed with the following command:
+
+```bash
+kubectl label --overwrite ns istio-system pod-security.kubernetes.io/enforce=privileged
+```
+
+This is what the chart does by default: `ENABLE_PRIVILEGED_PSS` is `true`, and a pre-install hook Job applies the label. Set it to `false` to opt out and label the namespace yourself.
+It requires the following cluster rights for deployment user:
+
+```yaml
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "patch"]
+    resourceNames:
+    - istio-system
+```
+
+The property runs a pre-install hook Job with the `kubectl` image assembled from
+`patchPss.image`. Redirect the registry alone when the default one is not
+reachable from the cluster; the repository and the tag stay as they are:
+
+```yaml
+qubership-istio:
+  patchPss:
+    image:
+      registry: <registry>
+```
+
 
 # Best practices and recommendations
 ## HWE
@@ -71,6 +106,15 @@ Recommended for deployments with high workload and large amount of data.
 |Parameter          |Type   |Mandatory|Default value|Description                                                                                 |
 |-------------------|-------|---------|-------------|--------------------------------------------------------------------------------------------|
 |MONITORING_ENABLED |boolean|no       |true         |Flag to install custom resources (PodMonitor and grafana dashboard) for prometheus monitoring|
+|ENABLE_PRIVILEGED_PSS|boolean|no     |true         |Label the release namespace `pod-security.kubernetes.io/enforce=privileged` from a pre-install/pre-upgrade hook Job, for clusters where Pod Security Admission would otherwise reject the Ambient Mesh pods. Needs `get` and `patch` on the namespace|
+|patchPss.image.registry|string|no    |`ghcr.io`    |Registry the PSS patch Job image is pulled from. Redirect this alone for a private registry. Leave it empty to pull the repository unqualified|
+|patchPss.image.repository|string|no  |`netcracker/qubership-docker-kubectl`|Repository of the kubectl image used by the PSS patch Job. Not an Istio image, so it is not derived from `global.hub`|
+|patchPss.image.tag |string |no       |`0.0.9`      |Tag of that image. Used only when `patchPss.image.digest` is unset|
+|patchPss.image.digest|string|no      |unset        |Digest of that image (`sha256:...`). When set, the image is pinned by digest and the tag is ignored|
+|patchPss.imagePullPolicy|string|no   |IfNotPresent |Image pull policy for the PSS patch Job                                                     |
+|patchPss.resources |object |no       |75m/75Mi requests, 150m/150Mi limits|Resources for the PSS patch Job container                                          |
+|patchPss.podSecurityContext|object|no|`runAsNonRoot: true`, `runAsUser: 1001`, `seccompProfile.type: RuntimeDefault`|Pod security context of the PSS patch Job. Must stay compliant with the policy currently enforced on the namespace, otherwise the Job cannot be admitted in order to relax it|
+|patchPss.containerSecurityContext|object|no|no privilege escalation, drop `ALL`, read-only root filesystem|Container security context of the PSS patch Job|
 
 In Helm values you can provide any configuration parameters supported by corresponding vanilla Istio helm chart, e.g. to set default connectTimeout for `istiod`:
 ```yaml

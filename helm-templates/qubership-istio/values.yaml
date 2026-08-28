@@ -159,3 +159,63 @@ ztunnel:
 MONITORING_ENABLED: true
 monitoring:
   scrapeInterval: 15s
+
+# ---------------------------------------------------------------------------
+# pre-deploy — namespace Pod Security Standards patch
+# ---------------------------------------------------------------------------
+# Istio ambient requires privileged pods (istio-cni needs hostNetwork plus
+# NET_ADMIN/SYS_ADMIN; ztunnel needs the same). Where Pod Security Admission
+# enforces "baseline" or "restricted" on this namespace, those DaemonSets are
+# accepted as objects but their pods are rejected, leaving no data plane.
+#
+# When enabled, a pre-install/pre-upgrade hook Job labels the release namespace
+# pod-security.kubernetes.io/enforce=privileged before Istio is installed.
+# Opt-in: it is a no-op without PSA, and namespace security labels are usually
+# owned by the cluster administrator. The label is NOT removed on uninstall.
+ENABLE_PRIVILEGED_PSS: true
+
+patchPss:
+  # kubectl image for the patch Job.
+  #
+  # Split into parts so a private-registry installation can redirect the
+  # registry alone and keep the rest. It is not an Istio image and does not
+  # live under global.hub, which is the Istio hub (<hub>/pilot:<tag>) - so
+  # whatever redirects the Istio images has to redirect this one too. It is a
+  # pre-install hook: an image that cannot be pulled fails the whole release
+  # before a single Istio manifest is applied.
+  #
+  # The tag is a released one on purpose. A floating tag with
+  # imagePullPolicy: IfNotPresent leaves a node on whatever it happened to
+  # pull first, and different nodes then run different versions.
+  image:
+    registry: ghcr.io
+    repository: netcracker/qubership-docker-kubectl
+    tag: 0.0.9
+    # digest: sha256:...   # when set, used instead of tag
+  imagePullPolicy: IfNotPresent
+
+  resources:
+    requests:
+      cpu: 75m
+      memory: 75Mi
+    limits:
+      cpu: 150m
+      memory: 150Mi
+
+  # Must stay restricted-compliant: if the namespace already enforces
+  # "restricted", a non-compliant pod is rejected and the label can never be
+  # fixed. runAsUser must stay non-zero — runAsNonRoot alone is re-checked by the
+  # kubelet against the image's user. 1001 matches the kubectl image's USER.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1001
+    seccompProfile:
+      type: RuntimeDefault
+
+  # Container-level only — PSS "restricted" does not inherit these from the pod.
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL

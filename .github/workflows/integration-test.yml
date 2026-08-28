@@ -97,10 +97,13 @@ jobs:
             require_dual_stack: "true"
           # General functional tests (not IP-family specific), on a plain
           # single-stack IPv4 cluster — kept separate from the dual-stack tests.
+          # patch-pss runs last: it temporarily stages enforce=restricted on
+          # istio-system and leaves ENABLE_PRIVILEGED_PSS=true sticky on the
+          # release, so nothing after it could be affected.
           - name: functional
             ip_family: ipv4
             kind_config: tests/kind-ipv4.yaml
-            tests: gateway num-trusted-proxies rollout istiod-rbac
+            tests: gateway num-trusted-proxies rollout istiod-rbac patch-pss
             require_dual_stack: "false"
     name: integration-test (${{ matrix.name }})
     steps:
@@ -208,6 +211,7 @@ jobs:
           kubectl logs -n istio-system -l app=istiod --tail=200           > /tmp/istio-debug/istiod-logs.txt    2>&1 || true
           kubectl logs -n istio-system -l k8s-app=istio-cni-node --tail=200 > /tmp/istio-debug/cni-logs.txt    2>&1 || true
           kubectl logs -n istio-system -l app=ztunnel --tail=200          > /tmp/istio-debug/ztunnel-logs.txt   2>&1 || true
+          kubectl logs -n istio-system job/istio-patch-pss --tail=200      > /tmp/istio-debug/patch-pss-logs.txt 2>&1 || true
 
       - name: Upload debug bundle
         if: failure()
