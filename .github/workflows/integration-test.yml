@@ -1,6 +1,14 @@
 name: Integration Test
 on:
-  workflow_call: {}
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Git reference (branch, tag, or SHA) to checkout and test'
+        required: false
+        type: string
+        default: ""
+
+permissions: {}
 
 jobs:
   # Build and lint the chart once. The matrix legs below differ only in cluster
@@ -8,9 +16,14 @@ jobs:
   # time and ships the extracted chart to the legs as an artifact.
   build-and-lint:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
 
       # The chart's Istio subcharts (base, cni, istiod, ztunnel) are not
       # committed; they are vendored into charts/ by the helm-charts-build job
@@ -19,7 +32,7 @@ jobs:
       # otherwise the image carries a chart with no charts/ and the install
       # fails with "missing in charts/ directory".
       - name: Download helm-templates artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: helm-templates
           path: ./helm-templates/qubership-istio
@@ -39,17 +52,17 @@ jobs:
           docker rm ${CID}
 
       - name: Install Helm 4
-        uses: azure/setup-helm@v5
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v4.0.1
 
       - name: Setup Python (required for ct)
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.x"
 
       - name: Install chart-testing
-        uses: helm/chart-testing-action@v2
+        uses: helm/chart-testing-action@6ec842c01de15ebb84c8627d2744a0c2f2755c9f # v2.8.0
 
       # Lint chart (includes schema validation)
       - name: Run ct lint
@@ -58,7 +71,7 @@ jobs:
       # Ship the built chart (with vendored charts/) so the matrix legs install
       # the same artifact instead of each rebuilding the transfer image.
       - name: Upload extracted chart
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: helm-templates-extracted
           path: ./helm-templates-extracted
@@ -66,6 +79,8 @@ jobs:
   integration-test:
     needs: build-and-lint
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -108,18 +123,21 @@ jobs:
     name: integration-test (${{ matrix.name }})
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
 
       # The chart (with vendored charts/) was built and linted once by the
       # build-and-lint job; restore it instead of rebuilding the transfer image.
       - name: Download extracted chart
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: helm-templates-extracted
           path: ./helm-templates-extracted
 
       - name: Install Helm 4
-        uses: azure/setup-helm@v5
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v4.0.1
 
@@ -148,7 +166,7 @@ jobs:
       # Install kind/kubectl only, then create the cluster explicitly so the
       # ipFamily config is guaranteed to reach kind.
       - name: Install kind and kubectl
-        uses: helm/kind-action@v1
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
           install_only: true
 
@@ -215,7 +233,7 @@ jobs:
 
       - name: Upload debug bundle
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: istio-debug-${{ matrix.name }}-${{ github.run_id }}
           path: /tmp/istio-debug/
