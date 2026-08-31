@@ -87,7 +87,7 @@
             "type": "prometheus",
             "uid": "$datasource"
           },
-          "expr": "sum by (tag) (istio_build{component=\"pilot\"})",
+          "expr": "sum by (tag) (istio_build{cluster=\"$cluster\", component=\"pilot\"})",
           "legendFormat": "Version ({{tag}})"
         }
       ],
@@ -172,7 +172,7 @@
             "type": "prometheus",
             "uid": "$datasource"
           },
-          "expr": "sum by (pod) (container_memory_working_set_bytes{container=\"discovery\",pod=~\"istiod-.*\"})",
+          "expr": "sum by (pod) (container_memory_working_set_bytes{cluster=\"$cluster\", container=\"discovery\",pod=~\"istiod-.*\"})",
           "legendFormat": "Container ({{pod}})"
         },
         {
@@ -180,7 +180,7 @@
             "type": "prometheus",
             "uid": "$datasource"
           },
-          "expr": "sum by (pod) (go_memstats_stack_inuse_bytes{app=\"istiod\"})",
+          "expr": "sum by (pod) (go_memstats_stack_inuse_bytes{cluster=\"$cluster\", app=\"istiod\"})",
           "legendFormat": "Stack ({{pod}})"
         },
         {
@@ -188,7 +188,7 @@
             "type": "prometheus",
             "uid": "$datasource"
           },
-          "expr": "sum by (pod) (go_memstats_heap_inuse_bytes{app=\"istiod\"})",
+          "expr": "sum by (pod) (go_memstats_heap_inuse_bytes{cluster=\"$cluster\", app=\"istiod\"})",
           "legendFormat": "Heap (In Use) ({{pod}})"
         },
         {
@@ -196,7 +196,7 @@
             "type": "prometheus",
             "uid": "$datasource"
           },
-          "expr": "sum by (pod) (go_memstats_heap_alloc_bytes{app=\"istiod\"})",
+          "expr": "sum by (pod) (go_memstats_heap_alloc_bytes{cluster=\"$cluster\", app=\"istiod\"})",
           "legendFormat": "Heap (Allocated) ({{pod}})"
         },
         {
@@ -205,7 +205,7 @@
             "uid": "$datasource"
           },
           "alias": "limit",
-          "expr": "kube_pod_container_resource_limits{container=\"discovery\",pod=~\"istiod-.*\",resource=\"memory\"}",
+          "expr": "kube_pod_container_resource_limits{cluster=\"$cluster\", container=\"discovery\",pod=~\"istiod-.*\",resource=\"memory\"}",
           "legendFormat": "Memory Limit ({{pod}})",
           "refId": "F"
         }
@@ -271,7 +271,7 @@
             "type": "prometheus",
             "uid": "$datasource"
           },
-          "expr": "sum by (pod) (rate(go_memstats_alloc_bytes_total{app=\"istiod\"}[$__rate_interval]))",
+          "expr": "sum by (pod) (rate(go_memstats_alloc_bytes_total{cluster=\"$cluster\", app=\"istiod\"}[$__rate_interval]))",
           "legendFormat": "Bytes ({{pod}})"
         },
         {
@@ -279,7 +279,7 @@
             "type": "prometheus",
             "uid": "$datasource"
           },
-          "expr": "sum by (pod) (rate(go_memstats_mallocs_total{app=\"istiod\"}[$__rate_interval]))",
+          "expr": "sum by (pod) (rate(go_memstats_mallocs_total{cluster=\"$cluster\", app=\"istiod\"}[$__rate_interval]))",
           "legendFormat": "Objects ({{pod}})"
         }
       ],
@@ -325,7 +325,6 @@
             ]
           }
         ]
-
       },
       "gridPos": {
         "h": 10,
@@ -351,7 +350,7 @@
             "type": "prometheus",
             "uid": "$datasource"
           },
-          "expr": "sum by (pod) (irate(container_cpu_usage_seconds_total{container=\"discovery\",pod=~\"istiod-.*\"}[$__rate_interval]))",
+          "expr": "sum by (pod) (irate(container_cpu_usage_seconds_total{cluster=\"$cluster\", container=\"discovery\",pod=~\"istiod-.*\"}[$__rate_interval]))",
           "legendFormat": "Container ({{pod}})"
         },
         {
@@ -360,7 +359,7 @@
             "uid": "$datasource"
           },
           "alias": "limit",
-          "expr": "kube_pod_container_resource_limits{container=\"discovery\",pod=~\"istiod-.*\",resource=\"cpu\"}",
+          "expr": "kube_pod_container_resource_limits{cluster=\"$cluster\", container=\"discovery\",pod=~\"istiod-.*\",resource=\"cpu\"}",
           "legendFormat": "CPU Limit ({{pod}})",
           "refId": "B"
         }
@@ -407,7 +406,7 @@
             "type": "prometheus",
             "uid": "$datasource"
           },
-          "expr": "sum by (pod) (go_goroutines{app=\"istiod\"})",
+          "expr": "sum by (pod) (go_goroutines{cluster=\"$cluster\", app=\"istiod\"})",
           "legendFormat": "Goroutines ({{pod}})"
         }
       ],
@@ -601,12 +600,13 @@
             "type": "prometheus",
             "uid": "$datasource"
           },
-          "expr": "sum by (type) (irate(pilot_xds_pushes[$__rate_interval]))",
+          "expr": "sum by (type) (irate(pilot_xds_pushes{cluster=\"$cluster\"}[$__rate_interval]))",
           "legendFormat": "{{type}}"
         }
       ],
       "title": "XDS Pushes",
-      "type": "timeseries"
+      "type": "timeseries",
+      "description": "Rate of configuration pushes sent by Pilot to the data plane, by resource type"
     },
     {
       "datasource": {
@@ -647,7 +647,7 @@
             "type": "prometheus",
             "uid": "$datasource"
           },
-          "expr": "sum by (type,event) (rate(pilot_k8s_reg_events[$__rate_interval]))",
+          "expr": "sum by (type,event) (rate(pilot_k8s_reg_events{cluster=\"$cluster\"}[$__rate_interval]))",
           "legendFormat": "{{event}} {{type}}"
         },
         {
@@ -655,7 +655,7 @@
             "type": "prometheus",
             "uid": "$datasource"
           },
-          "expr": "sum by (type,event) (rate(pilot_k8s_cfg_events[$__rate_interval]))",
+          "expr": "sum by (type,event) (rate(pilot_k8s_cfg_events{cluster=\"$cluster\"}[$__rate_interval]))",
           "legendFormat": "{{event}} {{type}}"
         },
         {
@@ -663,7 +663,7 @@
             "type": "prometheus",
             "uid": "$datasource"
           },
-          "expr": "sum by (type) (rate(pilot_push_triggers[$__rate_interval]))",
+          "expr": "sum by (type) (rate(pilot_push_triggers{cluster=\"$cluster\"}[$__rate_interval]))",
           "legendFormat": "Push {{type}}"
         }
       ],
@@ -709,7 +709,7 @@
             "type": "prometheus",
             "uid": "$datasource"
           },
-          "expr": "sum(envoy_cluster_upstream_cx_active{cluster_name=\"xds-grpc\"})",
+          "expr": "sum(envoy_cluster_upstream_cx_active{cluster=\"$cluster\", cluster_name=\"xds-grpc\"})",
           "legendFormat": "Connections (client reported)"
         },
         {
@@ -717,7 +717,7 @@
             "type": "prometheus",
             "uid": "$datasource"
           },
-          "expr": "sum (pilot_xds)",
+          "expr": "sum (pilot_xds{cluster=\"$cluster\"})",
           "legendFormat": "Connections (server reported)"
         }
       ],
@@ -763,7 +763,7 @@
             "type": "prometheus",
             "uid": "$datasource"
           },
-          "expr": "sum by (type) (pilot_total_xds_rejects)",
+          "expr": "sum by (type) (pilot_total_xds_rejects{cluster=\"$cluster\"})",
           "legendFormat": "Rejected Config ({{type}})"
         },
         {
@@ -771,7 +771,7 @@
             "type": "prometheus",
             "uid": "$datasource"
           },
-          "expr": "pilot_total_xds_internal_errors",
+          "expr": "pilot_total_xds_internal_errors{cluster=\"$cluster\"}",
           "legendFormat": "Internal Errors"
         }
       ],
@@ -817,7 +817,7 @@
             "type": "prometheus",
             "uid": "$datasource"
           },
-          "expr": "sum(rate(pilot_xds_push_time_bucket{}[$__rate_interval])) by (le)",
+          "expr": "sum(rate(pilot_xds_push_time_bucket{cluster=\"$cluster\"}[$__rate_interval])) by (le)",
           "format": "heatmap",
           "legendFormat": "{{le}}"
         }
@@ -864,7 +864,7 @@
             "type": "prometheus",
             "uid": "$datasource"
           },
-          "expr": "sum(rate(pilot_xds_config_size_bytes_bucket{}[$__rate_interval])) by (le)",
+          "expr": "sum(rate(pilot_xds_config_size_bytes_bucket{cluster=\"$cluster\"}[$__rate_interval])) by (le)",
           "format": "heatmap",
           "legendFormat": "{{le}}"
         }
@@ -902,7 +902,7 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 24,
         "x": 0,
         "y": 101
       },
@@ -921,7 +921,7 @@
             "type": "prometheus",
             "uid": "$datasource"
           },
-          "expr": "sum (rate(galley_validation_passed[$__rate_interval]))",
+          "expr": "sum (rate(galley_validation_passed{cluster=\"$cluster\"}[$__rate_interval]))",
           "legendFormat": "Success"
         },
         {
@@ -929,62 +929,11 @@
             "type": "prometheus",
             "uid": "$datasource"
           },
-          "expr": "sum (rate(galley_validation_failed[$__rate_interval]))",
+          "expr": "sum (rate(galley_validation_failed{cluster=\"$cluster\"}[$__rate_interval]))",
           "legendFormat": "Failure"
         }
       ],
       "title": "Validation",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "datasource",
-        "uid": "-- Mixed --"
-      },
-      "description": "Size of each xDS push.\n",
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "fillOpacity": 10,
-            "gradientMode": "hue",
-            "showPoints": "never"
-          }
-        }
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 101
-      },
-      "id": 17,
-      "interval": "5s",
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list"
-        }
-      },
-      "pluginVersion": "v11.0.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "expr": "sum (rate(sidecar_injection_success_total[$__rate_interval]))",
-          "legendFormat": "Success"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "expr": "sum (rate(sidecar_injection_failure_total[$__rate_interval]))",
-          "legendFormat": "Failure"
-        }
-      ],
-      "title": "Injection",
       "type": "timeseries"
     }
   ],
@@ -996,6 +945,30 @@
         "name": "datasource",
         "query": "prometheus",
         "type": "datasource"
+      },
+      {
+        "current": {
+          "isNone": true,
+          "selected": false,
+          "text": "None",
+          "value": ""
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "$datasource"
+        },
+        "definition": "label_values(up, cluster)",
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "name": "cluster",
+        "query": {
+          "query": "label_values(up, cluster)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 1,
+        "sort": 0,
+        "type": "query"
       }
     ]
   },
@@ -1006,5 +979,8 @@
   "timezone": "utc",
   "title": "Istio Control Plane Dashboard",
   "uid": "1813f692a8e4ac77155348d4c7d2fba8",
-  "gnetId": 7645
+  "gnetId": 7645,
+  "tags": [
+    "istio"
+  ]
 }
