@@ -19,25 +19,9 @@ global:
   # Currently supported are: [debug, distroless]
   # variant: ""
 
-  # Node inotify limits, raised by an init container in the cni and ztunnel
-  # DaemonSets before the agents start.
-  #
-  # Both agents create inotify watchers as root, and the budget for inotify
-  # instances is per-UID: it is shared with kubelet, containerd and everything
-  # else the node runs as root. On cgroup v2 containerd takes one instance per
-  # container, so the kernel default of 128 is exhausted around fifty pods -
-  # below what a default kubelet (maxPods 110) is allowed to schedule. The
-  # agents are simply the ones that ask last, and they fail with a misleading
-  # "Too many open files": inotify_init1() returns the same EMFILE as a real
-  # file-descriptor shortage.
-  #
-  # The sysctl is not namespaced, so a pod securityContext cannot set it and
-  # kubelet will not accept it in --allowed-unsafe-sysctls either.
-  #
-  # Values are written only upwards - a node already configured higher is left
-  # alone - and the defaults are the ones OpenShift's openshift-node tuned
-  # profile ships. Turn this off where the platform already sets them, for
-  # example through /etc/sysctl.d or a Tuned profile.
+  # The node agents create inotify watchers as root, and the kernel default of 128 instances is
+  # shared with kubelet and containerd - too few on a busy node. An init container in the cni and
+  # ztunnel DaemonSets raises these limits before the agents start, and only ever upwards.
   nodeTuning:
     enabled: true
     maxUserInstances: 8192

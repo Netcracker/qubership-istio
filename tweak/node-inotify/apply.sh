@@ -15,8 +15,7 @@ for chart in cni ztunnel; do
     echo '{{- end -}}'
   } > "${TPL_DIR}/_daemonset-upstream.tpl"
   rm "${TPL_DIR}/daemonset.yaml"
-  # The file keeps the upstream name on purpose. Helm renders templates in reverse
-  # alphabetical order, so zzz_profile.yaml and zzzz_tweak.yaml still run first and
-  # the registry override is already applied by the time this one is rendered.
+  # Keeps the upstream file name, so it renders after zzz_profile.yaml and zzzz_tweak.yaml
+  # exactly as the original did - Helm orders templates in reverse.
   sed "s/@CHART@/${chart}/g" "${SCRIPT_DIR}/daemonset.yaml" > "${TPL_DIR}/daemonset.yaml"
 done
