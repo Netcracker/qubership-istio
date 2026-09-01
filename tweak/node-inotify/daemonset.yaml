@@ -1,0 +1,99 @@
+{{- /*
+  Replaces the upstream @CHART@ DaemonSet with the same object plus an init container
+  that raises the node's inotify limits before the agent starts.
+
+  Why this is needed at all: both node agents create inotify watchers as root - ztunnel
+  on the CA root certificate directory, istio-cni-node on the CNI config it installs -
+  and the budget for inotify instances is per-UID and shared with kubelet, containerd
+  and every other root process on the node. The kernel default of 128 instances is
+  exhausted on a busy node, because containerd takes one instance per container on
+  cgroup v2, and the agents then fail with a misleading "Too many open files".
+
+  Why an init container and not a pod sysctl: fs.inotify.max_user_instances is not a
+  namespaced sysctl, so neither securityContext.sysctls nor the kubelet
+  --allowed-unsafe-sysctls flag can set it - kubelet refuses to start with the latter.
+  Writing to the host's /proc/sys from a container is the second of the two ways the
+  Kubernetes documentation names for node-level sysctls.
+
+  Why the upstream template is rendered and re-parsed instead of patched textually:
+  the result is bound to the shape of the object, not to any upstream line, so it
+  survives an Istio bump as long as the resource stays a DaemonSet.
+*/ -}}
+{{- define "qubership.@CHART@-node-inotify-script" -}}
+# Raise the node's inotify limits, and only ever upwards: a node where the platform
+# already set a higher value must not be lowered to ours.
+#
+# This script never fails the pod. istio-cni-node rolls without surge
+# (maxUnavailable: 1, hostNetwork forbids a second pod on the node), so the running
+# pod is deleted before the new one starts - and an init container that exits
+# non-zero would leave the node with no CNI at all, which is worse than the limit it
+# is trying to raise. If the write does not go through, the agent still starts and
+# fails the way it does today, with the reason printed here right above it.
+for p in max_user_instances:{{ .instances }} max_user_watches:{{ .watches }}; do
+  f=/host-inotify/${p%%:*}
+  want=${p##*:}
+  cur=$(cat "$f" 2>/dev/null)
+  case "$cur" in
+    ''|*[!0-9]*) echo "$f: value is not readable, left alone"; continue ;;
+  esac
+  if [ "$cur" -ge "$want" ]; then
+    echo "$f: $cur, already at or above $want"
+  elif echo "$want" > "$f" 2>/dev/null; then
+    echo "$f: $cur -> $want"
+  else
+    echo "$f: $cur, write refused - the node is NOT tuned, expect 'Too many open files'"
+  fi
+done
+exit 0
+{{- end -}}
+{{- $rendered := include "qubership.@CHART@-daemonset-upstream" . -}}
+{{- $ds := $rendered | fromYaml -}}
+{{- $tuning := dig "nodeTuning" dict (.Values.global | default dict) -}}
+{{- /* An empty render means the resource scope excludes this chart; fromYaml gives an
+     empty map then, so the kind is what tells the two cases apart. */ -}}
+{{- if and $ds.kind (dig "enabled" false $tuning) -}}
+{{- if ne $ds.kind "DaemonSet" -}}
+  {{- fail (printf "qubership node-inotify: expected a DaemonSet from the @CHART@ chart, got %q - the upstream shape changed, re-review this tweak" $ds.kind) -}}
+{{- end -}}
+{{- $spec := $ds.spec.template.spec -}}
+{{- $containers := $spec.containers | default list -}}
+{{- if not $containers -}}
+  {{- fail "qubership node-inotify: the @CHART@ DaemonSet has no containers - the upstream shape changed, re-review this tweak" -}}
+{{- end -}}
+{{- /* Reuse the image the chart already pulls, so nothing new enters the delivery. The
+     ambient profile selects the distroless variant, which carries no shell, so the
+     default variant of the same image and tag is used instead; trimSuffix is a no-op
+     when no variant is set. */ -}}
+{{- $image := trimSuffix "-distroless" (index $containers 0).image -}}
+{{- $init := dict
+      "name" "node-inotify-tuning"
+      "image" $image
+      "imagePullPolicy" ((index $containers 0).imagePullPolicy | default "IfNotPresent")
+      "command" (list "/bin/sh" "-c" (include "qubership.@CHART@-node-inotify-script" (dict "instances" (dig "maxUserInstances" 8192 $tuning) "watches" (dig "maxUserWatches" 65536 $tuning))))
+      "resources" (dict "requests" (dict "cpu" "10m" "memory" "16Mi"))
+      "securityContext" (dict
+        "privileged" false
+        "allowPrivilegeEscalation" false
+        "readOnlyRootFilesystem" true
+        "runAsNonRoot" false
+        "runAsUser" (int 0)
+        "seccompProfile" (dict "type" "RuntimeDefault")
+        "capabilities" (dict "drop" (list "ALL")))
+      "volumeMounts" (list (dict "name" "node-inotify" "mountPath" "/host-inotify"))
+-}}
+{{- /* Root is the one privilege that is actually required: the sysctl files belong to
+     root:root with mode 0644, so plain DAC write access is enough and no capability
+     has to be added. On SELinux nodes the upstream main container is given the
+     spc_t type; match it, or the write is refused by policy rather than by mode. */ -}}
+{{- with .Values.seLinuxOptions -}}
+  {{- $_ := set $init.securityContext "seLinuxOptions" (merge . (dict "type" "spc_t")) -}}
+{{- end -}}
+{{- /* Only the one directory is mounted, not the whole of /proc/sys: it holds exactly
+     the three inotify knobs, and none of the classic container-escape targets. */ -}}
+{{- $volume := dict "name" "node-inotify" "hostPath" (dict "path" "/proc/sys/fs/inotify" "type" "Directory") -}}
+{{- $_ := set $spec "initContainers" (append ($spec.initContainers | default list) $init) -}}
+{{- $_ := set $spec "volumes" (append ($spec.volumes | default list) $volume) -}}
+{{ toYaml $ds }}
+{{- else -}}
+{{ $rendered }}
+{{- end -}}
