@@ -190,7 +190,7 @@ patchPss:
   image:
     registry: ghcr.io
     repository: netcracker/qubership-docker-kubectl
-    tag: 0.0.9
+    tag: 0.0.9@sha256:e2d6dab8d41d9d43adaf38b3142b121db60bb9f5190d7498265c9a9cdcedeab1
     # digest: sha256:...   # when set, used instead of tag
   imagePullPolicy: IfNotPresent
 
