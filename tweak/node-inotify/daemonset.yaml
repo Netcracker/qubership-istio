@@ -5,7 +5,9 @@
 {{- define "qubership.@CHART@-node-inotify" -}}
 name: node-inotify-tuning
 image: {{ .image }}
-imagePullPolicy: {{ .pullPolicy }}
+{{- with .pullPolicy }}
+imagePullPolicy: {{ . }}
+{{- end }}
 command:
 - /bin/sh
 - -c
@@ -50,7 +52,7 @@ volumeMounts:
      variant of the same image and tag does. */ -}}
 {{- $init := fromYaml (include "qubership.@CHART@-node-inotify" (dict
       "image" (trimSuffix "-distroless" $main.image)
-      "pullPolicy" ($main.imagePullPolicy | default "IfNotPresent")
+      "pullPolicy" $main.imagePullPolicy
       "instances" ($tuning.maxUserInstances | default 8192)
       "watches" ($tuning.maxUserWatches | default 65536))) -}}
 {{- $volume := dict "name" "node-inotify" "hostPath" (dict "path" "/proc/sys/fs/inotify" "type" "Directory") -}}
