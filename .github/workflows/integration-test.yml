@@ -54,7 +54,7 @@ jobs:
       - name: Install Helm 4
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
-          version: v4.0.1
+          version: v4.2.4
 
       - name: Setup Python (required for ct)
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -139,7 +139,7 @@ jobs:
       - name: Install Helm 4
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
-          version: v4.0.1
+          version: v4.2.4
 
       # kind needs IPv6 enabled in the Docker daemon for ipv6/dual clusters.
       # Merge into the runner's existing daemon.json rather than overwrite it,
