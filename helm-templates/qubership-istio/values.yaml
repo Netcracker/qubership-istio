@@ -26,6 +26,10 @@ global:
     enabled: true
     maxUserInstances: 8192
     maxUserWatches: 65536
+    # Image of that init container. Empty means the agent's own image without the
+    # -distroless suffix, which is the same image with a shell. Name it here when the
+    # Istio images are pinned by digest or renamed, and it must carry a shell.
+    image: ""
 
 # ---------------------------------------------------------------------------
 # istio-base — CRDs and cluster-scoped resources

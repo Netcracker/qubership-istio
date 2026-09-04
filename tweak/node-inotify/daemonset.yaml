@@ -48,10 +48,19 @@ volumeMounts:
 {{- if and $ds.kind $tuning.enabled -}}
 {{- $spec := $ds.spec.template.spec -}}
 {{- $main := index $spec.containers 0 -}}
-{{- /* The ambient profile pulls the distroless variant, which has no shell; the default
-     variant of the same image and tag does. */ -}}
+{{- /* The init container needs a shell, and the ambient profile pulls the distroless
+     variant, which has none. Dropping the suffix gives the default variant of the same
+     image and tag, which does. That is a guess about the reference, so it is only the
+     default: nodeTuning.image names the image outright when the guess cannot hold. */ -}}
+{{- $image := $tuning.image | default (trimSuffix "-distroless" $main.image) -}}
+{{- /* A digest names content, not a variant, so there is no suffix to drop and the guess
+     would silently hand back the distroless image. A container whose shell is missing is
+     never created, so the pod would hang in Init rather than fail open. */ -}}
+{{- if and (contains "@sha256:" $image) (not $tuning.image) -}}
+{{- fail "global.nodeTuning.image must name an image with a shell when the Istio images are pinned by digest, or set global.nodeTuning.enabled=false" -}}
+{{- end -}}
 {{- $init := fromYaml (include "qubership.@CHART@-node-inotify" (dict
-      "image" (trimSuffix "-distroless" $main.image)
+      "image" $image
       "pullPolicy" $main.imagePullPolicy
       "instances" ($tuning.maxUserInstances | default 8192)
       "watches" ($tuning.maxUserWatches | default 65536))) -}}
