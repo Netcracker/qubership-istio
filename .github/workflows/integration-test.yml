@@ -118,7 +118,7 @@ jobs:
           - name: functional
             ip_family: ipv4
             kind_config: tests/kind-ipv4.yaml
-            tests: gateway num-trusted-proxies rollout istiod-rbac patch-pss
+            tests: gateway num-trusted-proxies rollout istiod-rbac node-inotify patch-pss
             require_dual_stack: "false"
     name: integration-test (${{ matrix.name }})
     steps:

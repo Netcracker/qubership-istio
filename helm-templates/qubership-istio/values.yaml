@@ -19,6 +19,17 @@ global:
   # Currently supported are: [debug, distroless]
   # variant: ""
 
+  # The node agents create inotify watchers as root, and the kernel default of 128 instances is
+  # shared with kubelet and containerd - too few on a busy node. An init container in the cni and
+  # ztunnel DaemonSets raises these limits before the agents start, and only ever upwards.
+  nodeTuning:
+    enabled: true
+    maxUserInstances: 8192
+    maxUserWatches: 65536
+    # The init container's image, and it must carry a shell. Unset means the agent's own
+    # image without -distroless, or whatever a parent chart resolves; set it for a digest pin.
+    # image: ""
+
 # ---------------------------------------------------------------------------
 # istio-base — CRDs and cluster-scoped resources
 # ---------------------------------------------------------------------------
