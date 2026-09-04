@@ -18,6 +18,16 @@
 {{- define "custom.patchPss.registry" -}}{{- end -}}
 
 {{- /*
+  Image override point for the node tuning init container, empty on purpose.
+
+  Same contract again, and here it is the whole reference rather than the registry:
+  a delivery may not carry the image this chart would otherwise derive. Consulted
+  only when global.nodeTuning.image is empty, and the derivation is what answers
+  when both are.
+*/ -}}
+{{- define "custom.nodeTuning.image" -}}{{- end -}}
+
+{{- /*
   Image reference for the patch-pss hook, assembled from its parts.
 
   Kept in one place because the digest case has to win over the tag in every

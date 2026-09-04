@@ -49,14 +49,16 @@ volumeMounts:
 {{- $spec := $ds.spec.template.spec -}}
 {{- $main := index $spec.containers 0 -}}
 {{- /* The init container needs a shell, and the ambient profile pulls the distroless
-     variant, which has none. Dropping the suffix gives the default variant of the same
-     image and tag, which does. That is a guess about the reference, so it is only the
-     default: nodeTuning.image names the image outright when the guess cannot hold. */ -}}
-{{- $image := $tuning.image | default (trimSuffix "-distroless" $main.image) -}}
+     variant, which has none. Three sources, first one wins: the value names the image
+     outright, a parent chart resolves it for a delivery that carries a different one, or
+     the agent's own reference with the suffix dropped, which is the same image with a
+     shell. The last is a guess about the reference, which is why it comes last. */ -}}
+{{- $named := $tuning.image | default (include "custom.nodeTuning.image" .) -}}
+{{- $image := $named | default (trimSuffix "-distroless" $main.image) -}}
 {{- /* A digest names content, not a variant, so there is no suffix to drop and the guess
      would silently hand back the distroless image. A container whose shell is missing is
      never created, so the pod would hang in Init rather than fail open. */ -}}
-{{- if and (contains "@sha256:" $image) (not $tuning.image) -}}
+{{- if and (not $named) (contains "@sha256:" $image) -}}
 {{- fail "global.nodeTuning.image must name an image with a shell when the Istio images are pinned by digest, or set global.nodeTuning.enabled=false" -}}
 {{- end -}}
 {{- $init := fromYaml (include "qubership.@CHART@-node-inotify" (dict

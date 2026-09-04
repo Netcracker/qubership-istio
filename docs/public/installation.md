@@ -118,7 +118,7 @@ Recommended for deployments with high workload and large amount of data.
 |global.nodeTuning.enabled|boolean|no|true|Run an init container in the `cni` and `ztunnel` DaemonSets that raises the node inotify limits before the agent starts. Set it to `false` where the platform already tunes them, through `/etc/sysctl.d` or a `Tuned` profile|
 |global.nodeTuning.maxUserInstances|integer|no|`8192`|Target value for `fs.inotify.max_user_instances`. The kernel default of 128 is a per-UID budget shared with kubelet and containerd, and the agents fail to start with `Too many open files` once it runs out|
 |global.nodeTuning.maxUserWatches|integer|no|`65536`|Target value for `fs.inotify.max_user_watches`|
-|global.nodeTuning.image|string|no|derived|Image of the init container. Empty means the agent's own image with the `-distroless` suffix dropped, which is the same image with a shell. Name it here when the Istio images are pinned by digest or renamed; the render fails rather than guessing. Whatever is named must carry a shell|
+|global.nodeTuning.image|string|no|derived|Image of the init container, and it must carry a shell. Empty means the agent's own image with the `-distroless` suffix dropped, which is the same image with one, unless a parent chart resolves the image itself through the `custom.nodeTuning.image` template. Name it here when the Istio images are pinned by digest or renamed: the render fails rather than guessing|
 
 The init container writes to `/proc/sys/fs/inotify` through a `hostPath` mount, so it runs as root
 on the node. The `privileged` policy this distribution already requires on `istio-system` covers that.
