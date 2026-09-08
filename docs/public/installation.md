@@ -115,6 +115,17 @@ Recommended for deployments with high workload and large amount of data.
 |patchPss.resources |object |no       |75m/75Mi requests, 150m/150Mi limits|Resources for the PSS patch Job container                                          |
 |patchPss.podSecurityContext|object|no|`runAsNonRoot: true`, `runAsUser: 1001`, `seccompProfile.type: RuntimeDefault`|Pod security context of the PSS patch Job. Must stay compliant with the policy currently enforced on the namespace, otherwise the Job cannot be admitted in order to relax it|
 |patchPss.containerSecurityContext|object|no|no privilege escalation, drop `ALL`, read-only root filesystem|Container security context of the PSS patch Job|
+|global.nodeTuning.enabled|boolean|no|true|Run an init container in the `cni` and `ztunnel` DaemonSets that raises the node inotify limits before the agent starts. Set it to `false` where the platform already tunes them, through `/etc/sysctl.d` or a `Tuned` profile|
+|global.nodeTuning.maxUserInstances|integer|no|`8192`|Target value for `fs.inotify.max_user_instances`. The kernel default of 128 is a per-UID budget shared with kubelet and containerd, and the agents fail to start with `Too many open files` once it runs out|
+|global.nodeTuning.maxUserWatches|integer|no|`65536`|Target value for `fs.inotify.max_user_watches`|
+|global.nodeTuning.image|string|no|derived|Image of the init container, and it must carry a shell. Empty means the agent's own image with the `-distroless` suffix dropped, which is the same image with one, unless a parent chart resolves the image itself through the `custom.nodeTuning.image` template. Name it here when the Istio images are pinned by digest or renamed: the render fails rather than guessing|
+
+The init container writes to `/proc/sys/fs/inotify` through a `hostPath` mount, so it runs as root
+on the node. The `privileged` policy this distribution already requires on `istio-system` covers that.
+
+A limit is raised only when the node sits below the target, so a node tuned higher keeps its own
+value. The container never fails the pod. Neither DaemonSet sets `updateStrategy`, so both roll at
+the Kubernetes default of `maxSurge: 0`: a pod that cannot start leaves the node without its agent.
 
 In Helm values you can provide any configuration parameters supported by corresponding vanilla Istio helm chart, e.g. to set default connectTimeout for `istiod`:
 ```yaml

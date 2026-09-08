@@ -13,6 +13,7 @@ done
 # 2. Apply tweaks (one script per action folder).
 bash "${SCRIPT_DIR}/custom-registry/apply.sh" "${CHARTS_DIR}"
 bash "${SCRIPT_DIR}/istiod-rbac/apply.sh" "${CHARTS_DIR}"
+bash "${SCRIPT_DIR}/node-inotify/apply.sh" "${CHARTS_DIR}"
 
 # 3. Repack all subcharts.
 for chart in cni istiod ztunnel; do

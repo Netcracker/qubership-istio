@@ -1,0 +1,75 @@
+{{- /* The upstream @CHART@ DaemonSet plus an init container that raises the node's inotify
+     limits: the agent creates watchers as root, and the kernel default of 128 instances is
+     shared with kubelet and containerd. The upstream template is rendered and re-parsed
+     instead of patched, so this is not tied to any upstream line. */ -}}
+{{- define "qubership.@CHART@-node-inotify" -}}
+name: node-inotify-tuning
+image: {{ .image }}
+{{- with .pullPolicy }}
+imagePullPolicy: {{ . }}
+{{- end }}
+command:
+- /bin/sh
+- -c
+- |
+  # Raise a limit only when it is below the target, so a node tuned higher is left alone.
+  for pair in max_user_instances:{{ .instances }} max_user_watches:{{ .watches }}; do
+    file=/host-inotify/${pair%%:*}
+    want=${pair##*:}
+    cur=$(cat "$file")
+    if [ "$cur" -lt "$want" ]; then
+      echo "$want" > "$file"
+      echo "$file: $cur -> $want"
+    else
+      echo "$file: $cur, kept"
+    fi
+  done
+  # Never fail the pod: istio-cni-node rolls without surge, so a failing init container would
+  # leave the node with no CNI at all.
+  exit 0
+securityContext:
+  # Root is the only privilege needed: the sysctl files are root:root 0644.
+  runAsUser: 0
+  privileged: false
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+  seccompProfile:
+    type: RuntimeDefault
+volumeMounts:
+- name: node-inotify
+  mountPath: /host-inotify
+{{- end -}}
+{{- $rendered := include "qubership.@CHART@-daemonset-upstream" . -}}
+{{- $ds := fromYaml $rendered -}}
+{{- $tuning := dig "nodeTuning" dict (.Values.global | default dict) -}}
+{{- /* No kind means the resource scope excluded this chart and the render was empty. */ -}}
+{{- if and $ds.kind $tuning.enabled -}}
+{{- $spec := $ds.spec.template.spec -}}
+{{- $main := index $spec.containers 0 -}}
+{{- /* The init container needs a shell, and the ambient profile pulls the distroless
+     variant, which has none. Three sources, first one wins: the value names the image
+     outright, a parent chart resolves it for a delivery that carries a different one, or
+     the agent's own reference with the suffix dropped, which is the same image with a
+     shell. The last is a guess about the reference, which is why it comes last. */ -}}
+{{- $named := $tuning.image | default (include "custom.nodeTuning.image" .) -}}
+{{- $image := $named | default (trimSuffix "-distroless" $main.image) -}}
+{{- /* A digest names content, not a variant, so there is no suffix to drop and the guess
+     would silently hand back the distroless image. A container whose shell is missing is
+     never created, so the pod would hang in Init rather than fail open. */ -}}
+{{- if and (not $named) (contains "@sha256:" $image) -}}
+{{- fail "global.nodeTuning.image must name an image with a shell when the Istio images are pinned by digest, or set global.nodeTuning.enabled=false" -}}
+{{- end -}}
+{{- $init := fromYaml (include "qubership.@CHART@-node-inotify" (dict
+      "image" $image
+      "pullPolicy" $main.imagePullPolicy
+      "instances" ($tuning.maxUserInstances | default 8192)
+      "watches" ($tuning.maxUserWatches | default 65536))) -}}
+{{- $volume := dict "name" "node-inotify" "hostPath" (dict "path" "/proc/sys/fs/inotify" "type" "Directory") -}}
+{{- $_ := set $spec "initContainers" (append ($spec.initContainers | default list) $init) -}}
+{{- $_ := set $spec "volumes" (append ($spec.volumes | default list) $volume) -}}
+{{ toYaml $ds }}
+{{- else -}}
+{{ $rendered }}
+{{- end -}}
