@@ -131,6 +131,25 @@ if [ "${BY_DIGEST}" != "ghcr.io/netcracker/qubership-docker-kubectl@sha256:01234
 fi
 echo "OK: the kubectl image is pinned, and one setting redirects it"
 
+# The hook follows the installation's pull policy, like every other container in the
+# chart, and carries no field of its own when none is set. A hardcoded policy here would
+# quietly ignore global.imagePullPolicy.
+policy_of() {
+  helm template "${HELM_RELEASE}" "${HELM_CHART_PATH}" \
+    --namespace "${ISTIO_NAMESPACE}" \
+    --set MONITORING_ENABLED=false \
+    --set ENABLE_PRIVILEGED_PSS=true \
+    "$@" --show-only templates/PatchPss.yaml \
+    | yq e -N 'select(.kind == "Job") | .spec.template.spec.containers[0].imagePullPolicy'
+}
+if [ "$(policy_of)" != "null" ]; then
+  fail "the hook pins an imagePullPolicy of its own: $(policy_of)"
+fi
+if [ "$(policy_of --set global.imagePullPolicy=Always)" != "Always" ]; then
+  fail "the hook ignores global.imagePullPolicy"
+fi
+echo "OK: the hook follows global.imagePullPolicy"
+
 # --- 2c. The same setting reaches the node tuning init container ---
 # Two callers, one reference. Checked here rather than assumed, because the point of
 # resolving the image centrally is that an installation never redirects it twice.

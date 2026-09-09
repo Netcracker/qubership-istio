@@ -8,33 +8,23 @@
 {{- define "custom.docker.registry" -}}{{- end -}}
 
 {{- /*
-  Image override point for the kubectl helpers, empty on purpose.
-
-  Same contract as custom.docker.registry above, and here it returns a whole
-  reference rather than a registry: an installation may carry the image under a
-  different name, not only in a different place. Consulted only when
-  global.kubectl.image is empty, so an explicitly configured image always wins.
+  Override point for the kubectl image, empty on purpose. Same contract as
+  custom.docker.registry above, and it returns a whole reference: an installation
+  may carry the image under a different name, not only in a different place.
 */ -}}
 {{- define "custom.kubectl.image" -}}{{- end -}}
 
 {{- /*
-  The kubectl image, resolved once for both of its callers.
+  The kubectl image, resolved once for both of its callers: the Pod Security
+  Standards hook and the node tuning init container. Each needs a shell, which the
+  Istio images do not carry.
 
-  Those callers are the Pod Security Standards patch hook and the node tuning
-  init container. They run the same image for the same reason - each needs a
-  shell, and the Istio images do not carry one - so the reference lives in one
-  place and an installation redirects it once instead of twice.
+  First non-empty wins: global.kubectl.image, then custom.kubectl.image, then the
+  reference below. It reads .Values.global and nothing else, because the init
+  container is injected into the cni and ztunnel subcharts, and a subchart sees only
+  its own values plus global.
 
-  Order, first non-empty wins: global.kubectl.image, then whatever
-  custom.kubectl.image returns, then the reference shipped with this chart.
-
-  It reads .Values.global and nothing else. The node tuning init container is
-  injected into the cni and ztunnel subcharts, and a subchart sees its own values
-  plus global, so a setting anywhere else would be invisible from there.
-
-  The shipped tag is a released one on purpose. A floating tag with
-  imagePullPolicy: IfNotPresent leaves a node on whatever it happened to pull
-  first, and different nodes then run different versions.
+  The tag is a released one: a floating tag lets nodes drift onto different versions.
 */ -}}
 {{- define "qubership-istio.kubectl.image" -}}
 {{- $set := dig "kubectl" "image" "" (.Values.global | default dict) -}}

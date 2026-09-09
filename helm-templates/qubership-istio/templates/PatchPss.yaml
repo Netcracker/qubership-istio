@@ -119,7 +119,9 @@ spec:
       containers:
         - name: patch-pss
           image: {{ include "qubership-istio.kubectl.image" . | quote }}
-          imagePullPolicy: {{ .Values.patchPss.imagePullPolicy }}
+          {{- with (.Values.global).imagePullPolicy }}
+          imagePullPolicy: {{ . }}
+          {{- end }}
           env:
             - name: NAMESPACE
               value: {{ .Release.Namespace | quote }}

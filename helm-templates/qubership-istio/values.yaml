@@ -27,16 +27,11 @@ global:
     maxUserInstances: 8192
     maxUserWatches: 65536
 
-  # The kubectl image, shared by the Pod Security Standards patch hook and the node tuning
-  # init container. Neither can run an Istio image: both need a shell, and the ambient
-  # profile pulls the distroless variants, which carry none.
-  #
-  # Set a full reference - registry, repository and tag or digest - to pull from a registry
-  # this cluster can reach. It replaces the shipped default entirely, so one setting covers
-  # both callers. Empty means ghcr.io/netcracker/qubership-docker-kubectl:0.0.9, unless a
-  # parent chart resolves the image through the custom.kubectl.image template.
-  kubectl:
-    image: ""
+  # Image for the kubectl helpers, the Pod Security Standards hook and the node tuning
+  # init container. A whole reference, by tag or by digest.
+  # Unset means ghcr.io/netcracker/qubership-docker-kubectl:0.0.9.
+  # kubectl:
+  #   image: ""
 
 # ---------------------------------------------------------------------------
 # istio-base — CRDs and cluster-scoped resources
@@ -194,10 +189,7 @@ monitoring:
 ENABLE_PRIVILEGED_PSS: true
 
 patchPss:
-  # The image is global.kubectl.image, shared with the node tuning init container. This
-  # hook is the stricter caller of the two: it runs pre-install, so an image the cluster
-  # cannot pull fails the whole release before a single Istio manifest is applied.
-  imagePullPolicy: IfNotPresent
+  # The image comes from global.kubectl.image, shared with the node tuning init container.
 
   resources:
     requests:
