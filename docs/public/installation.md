@@ -57,14 +57,15 @@ It requires the following cluster rights for deployment user:
     - istio-system
 ```
 
-The property runs a pre-install hook Job with the `kubectl` image named by
-`global.kubectl.image`. The node tuning init container runs that same image, so a cluster
-that cannot reach the default registry redirects it once:
+The property runs a pre-install hook Job with the `kubectl` image. The node tuning init
+container runs that same image, so a cluster that cannot reach `ghcr.io` redirects the
+registry once; the repository and the tag stay as shipped, and a chart upgrade still moves
+the version:
 
 ```yaml
 global:
   kubectl:
-    image: <registry>/<repository>:<tag>
+    registry: <registry>
 ```
 
 
@@ -106,7 +107,11 @@ Recommended for deployments with high workload and large amount of data.
 |-------------------|-------|---------|-------------|--------------------------------------------------------------------------------------------|
 |MONITORING_ENABLED |boolean|no       |true         |Flag to install custom resources (PodMonitor and grafana dashboard) for prometheus monitoring|
 |ENABLE_PRIVILEGED_PSS|boolean|no     |true         |Label the release namespace `pod-security.kubernetes.io/enforce=privileged` from a pre-install/pre-upgrade hook Job, for clusters where Pod Security Admission would otherwise reject the Ambient Mesh pods. Needs `get` and `patch` on the namespace|
-|global.kubectl.image|string|no|`ghcr.io/netcracker/qubership-docker-kubectl:0.0.9`|Full reference of the kubectl image, shared by the PSS patch Job and the node tuning init container. Neither can run an Istio image, because both need a shell and the ambient profile pulls distroless variants. Set it to pull from a registry this cluster can reach; a digest reference works too|
+|global.kubectl.registry|string|no|`ghcr.io`|Registry the kubectl image is pulled from, shared by the PSS patch Job and the node tuning init container. Redirect this alone for a private registry: the repository and the tag stay as shipped|
+|global.kubectl.repository|string|no|`netcracker/qubership-docker-kubectl`|Repository of the kubectl image. Not an Istio image, so it is not derived from `global.hub`|
+|global.kubectl.tag|string|no|`0.0.9`|Tag of that image. Used only when `global.kubectl.digest` is unset|
+|global.kubectl.digest|string|no|unset|Digest of that image (`sha256:...`). When set, the image is pinned by digest and the tag is ignored|
+|global.kubectl.image|string|no|unset|Whole reference, replacing registry, repository, tag and digest at once. For an image that does not follow the shipped naming|
 |patchPss.resources |object |no       |75m/75Mi requests, 150m/150Mi limits|Resources for the PSS patch Job container                                          |
 |patchPss.podSecurityContext|object|no|`runAsNonRoot: true`, `runAsUser: 1001`, `seccompProfile.type: RuntimeDefault`|Pod security context of the PSS patch Job. Must stay compliant with the policy currently enforced on the namespace, otherwise the Job cannot be admitted in order to relax it|
 |patchPss.containerSecurityContext|object|no|no privilege escalation, drop `ALL`, read-only root filesystem|Container security context of the PSS patch Job|
