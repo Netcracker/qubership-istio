@@ -19,13 +19,15 @@ global:
   # Currently supported are: [debug, distroless]
   # variant: ""
 
-  # The node agents create inotify watchers as root, and the kernel default of 128 instances is
-  # shared with kubelet and containerd - too few on a busy node. An init container in the cni and
-  # ztunnel DaemonSets raises these limits before the agents start, and only ever upwards.
+  # An init container in the cni and ztunnel DaemonSets raises the node's inotify limits
+  # before the agents start, and only ever upwards. The kernel default of 128 instances is
+  # shared with kubelet and containerd, and the agents fail with "Too many open files"
+  # once it runs out.
   nodeTuning:
     enabled: true
-    maxUserInstances: 8192
-    maxUserWatches: 65536
+    inotify:
+      maxUserInstances: 8192
+      maxUserWatches: 65536
 
   # Image for the kubectl helpers, the Pod Security Standards hook and the node tuning
   # init container. A whole reference, by tag or by digest.
