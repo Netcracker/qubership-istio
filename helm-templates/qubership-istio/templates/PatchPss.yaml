@@ -15,7 +15,7 @@ metadata:
     "helm.sh/hook": pre-install,pre-upgrade
     "helm.sh/hook-weight": "0"
     "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
-{{- /* Istio convention: a list of bare secret names, not LocalObjectReference objects, so
+{{/* Istio convention: a list of bare secret names, not LocalObjectReference objects, so
      each one is wrapped here - the core/v1 API rejects a plain string at decode. `with`
      skips both an unset value and an empty list, which the API rejects too. */}}
 {{- with .Values.global.imagePullSecrets }}
