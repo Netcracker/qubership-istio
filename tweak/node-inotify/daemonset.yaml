@@ -56,7 +56,7 @@ volumeMounts:
      The pull policy still comes from the agent's container: it is the policy this
      installation configured for the DaemonSet, and the init container belongs to it. */ -}}
 {{- $init := fromYaml (include "qubership.@CHART@-node-inotify" (dict
-      "image" (include "qubership-istio.kubectl.image" .)
+      "image" (include "qubership.kubectl.image" .)
       "pullPolicy" $main.imagePullPolicy
       "instances" ($tuning.maxUserInstances | default 8192)
       "watches" ($tuning.maxUserWatches | default 65536))) -}}

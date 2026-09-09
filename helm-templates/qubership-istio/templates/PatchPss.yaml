@@ -118,7 +118,7 @@ spec:
         {{- toYaml .Values.patchPss.podSecurityContext | nindent 8 }}
       containers:
         - name: patch-pss
-          image: {{ include "qubership-istio.kubectl.image" . | quote }}
+          image: {{ include "qubership.kubectl.image" . | quote }}
           {{- with (.Values.global).imagePullPolicy }}
           imagePullPolicy: {{ . }}
           {{- end }}

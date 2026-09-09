@@ -26,7 +26,7 @@
 
   The tag is a released one: a floating tag lets nodes drift onto different versions.
 */ -}}
-{{- define "qubership-istio.kubectl.image" -}}
+{{- define "qubership.kubectl.image" -}}
 {{- $set := dig "kubectl" "image" "" (.Values.global | default dict) -}}
 {{- $set | default (include "custom.kubectl.image" .) | default "ghcr.io/netcracker/qubership-docker-kubectl:0.0.9" -}}
 {{- end -}}
