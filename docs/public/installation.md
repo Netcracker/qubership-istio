@@ -8,6 +8,8 @@
   - [HWE](#hwe)
 - [Parameters](#parameters)
   - [qubership-istio](#qubership-istio)
+  - [Istio subcharts](#istio-subcharts)
+    - [What the distribution presets](#what-the-distribution-presets)
 - [Installation](#installation)
   - [Before you begin](#before-you-begin)
   - [On-prem](#on-prem)
@@ -147,14 +149,40 @@ A limit is raised only when the node sits below the target, so a node tuned high
 value. The container never fails the pod. Neither DaemonSet sets `updateStrategy`, so both roll at
 the Kubernetes default of `maxSurge: 0`: a pod that cannot start leaves the node without its agent.
 
-In Helm values you can provide any configuration parameters supported by corresponding vanilla Istio helm chart, e.g. to set default connectTimeout for `istiod`:
-```yaml
-qubership-istio: # root helm chart
-  istiod: # nested helm chart
-    meshConfig:
-      defaultConfig:
-        connectTimeout: 5s
+## Istio subcharts
+Every value of the vanilla `base`, `cni`, `istiod`, and `ztunnel` charts can be set here, under the subchart key. This distribution pins them at 1.30.2; read the full list from the charts themselves:
+
+```bash
+helm repo add istio https://istio-release.storage.googleapis.com/charts
+helm show values istio/istiod --version 1.30.2
 ```
+
+Values are nested one level under the subchart name, for example to set `connectTimeout` for `istiod`:
+
+```yaml
+istiod:
+  meshConfig:
+    defaultConfig:
+      connectTimeout: 5s
+```
+
+Prefix the whole block with `qubership-istio:` when this chart is installed as a dependency of a parent chart.
+
+### What the distribution presets
+The values below are set by this chart; everything else keeps the vanilla default. Each can be overridden.
+
+| Value                                                                                             |Set to| Effect of changing it                                                                                                                                                                            |
+|---------------------------------------------------------------------------------------------------|------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `global.profile`                                                                                  |`ambient`| Ambient mode is the only mode this distribution ships and tests                                                                                                                                  |
+| `global.proxy.privileged`                                                                         |`false`| Proxies run unprivileged. `istio-cni-node` and `ztunnel` are privileged regardless, see [Pod Security Admission](#pod-security-admission)                                                        |
+| `base.base.validationFailurePolicy`, `istiod.base.validationFailurePolicy`                        |`Fail`| The validating webhook rejects invalid Istio config from the start. The vanilla `Ignore` lets istiod flip the policy once it is ready, which server-side apply tools see as a change on every run |
+| `istiod.meshConfig.accessLogFile`                                                                 |`/dev/stdout`| Proxy access logs go to the pod log. Empty turns them off                                                                                                                                        |
+| `istiod.meshConfig.defaultConfig.gatewayTopology.numTrustedProxies`                               |`1`| How many proxies sit in front of a gateway, which decides the client address a gateway reads from `X-Forwarded-For`. Set it to the real number of hops, otherwise the address is wrong           |
+| `istiod.gatewayClasses.istio.service.spec.type`                                                   |`ClusterIP`| Gateways created from the `istio` class get no cloud load balancer. Set `LoadBalancer` where one is wanted                                                                                       |
+| `istiod.env.ISTIO_DUAL_STACK` and `istiod.meshConfig.defaultConfig.proxyMetadata.ISTIO_DUAL_STACK` |`"false"`| Dual-stack support. Both have to be changed together: the mesh config carries the flag into gateway pods, and only a restarted istiod reconciles existing gateways with it                       |
+| `ztunnel.meshConfig.defaultConfig.proxyMetadata`                                                  |`ISTIO_META_DNS_CAPTURE: "true"`, `ISTIO_META_ROUTER_MODE: "sni-dnat"`| Proxy metadata the chart sets for ztunnel                                                                                                                                                        |
+| `seccompProfile.type` on `global.proxy`, `cni`, `istiod`, and `istiod.gateways`                   |`RuntimeDefault`| Pods stay admissible under the `baseline` and `restricted` Pod Security Standards                                                                                                                |
+| `resources` on `cni`, `istiod`, `ztunnel`                                                         |see [HWE](#hwe)| Requests and limits for the three components                                                                                                                                                     |
 
 # Installation
 ## Before you begin
