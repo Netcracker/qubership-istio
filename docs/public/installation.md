@@ -2,6 +2,7 @@
 - [Prerequisites](#prerequisites)
   - [Common](#common)
   - [Kubernetes](#kubernetes)
+    - [Gateway API](#gateway-api)
     - [Pod Security Admission](#pod-security-admission)
 - [Best practices and recommendations](#best-practices-and-recommendations)
   - [HWE](#hwe)
@@ -33,7 +34,26 @@ Qubership Istio should be installed under the service account with cluster-admin
 ## Kubernetes
 Supported k8s versions: 1.31, 1.32, 1.33, 1.34, 1.35.
 
-Kubernetes Gateway API CRDs are not included into this distro - they should be preinstalled on the cluster.
+### Gateway API
+The Kubernetes Gateway API CRDs are not part of this distribution. Install them on the cluster before the chart: without them no `Gateway` or `HTTPRoute` can exist, and a namespace labeled `istio.io/use-waypoint` gets no waypoint, because a waypoint is itself a `Gateway`.
+
+The standard channel is enough. v1.2.1 is the version this distribution is verified against:
+
+```bash
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
+```
+
+The CRDs are cluster-scoped, so check whether the cluster already has them:
+
+```bash
+kubectl get crd gateways.gateway.networking.k8s.io
+```
+
+Applying a `Gateway` without them fails with:
+
+```text
+no matches for kind "Gateway" in version "gateway.networking.k8s.io/v1"
+```
 
 ### Pod Security Admission
 Istio Ambient Mesh requires privileged pods: `istio-cni` and `ztunnel` need `hostNetwork` together with the `NET_ADMIN` and `SYS_ADMIN` capabilities.
