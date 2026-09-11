@@ -15,7 +15,7 @@ metadata:
     "helm.sh/hook": pre-install,pre-upgrade
     "helm.sh/hook-weight": "0"
     "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
-{{- /* Istio convention: a list of bare secret names, not LocalObjectReference objects, so
+{{/* Istio convention: a list of bare secret names, not LocalObjectReference objects, so
      each one is wrapped here - the core/v1 API rejects a plain string at decode. `with`
      skips both an unset value and an empty list, which the API rejects too. */}}
 {{- with .Values.global.imagePullSecrets }}
@@ -118,8 +118,10 @@ spec:
         {{- toYaml .Values.patchPss.podSecurityContext | nindent 8 }}
       containers:
         - name: patch-pss
-          image: {{ include "qubership-istio.patchPss.image" . | quote }}
-          imagePullPolicy: {{ .Values.patchPss.imagePullPolicy }}
+          image: {{ include "qubership.kubectl.image" . | quote }}
+          {{- with (.Values.global).imagePullPolicy }}
+          imagePullPolicy: {{ . }}
+          {{- end }}
           env:
             - name: NAMESPACE
               value: {{ .Release.Namespace | quote }}

@@ -3,7 +3,8 @@ set -eux
 
 # Verifies the pre-deploy Pod Security Standards patch (templates/PatchPss.yaml):
 #   - nothing is rendered while ENABLE_PRIVILEGED_PSS is off;
-#   - the image is assembled from parts and an empty registry drops the slash;
+#   - the kubectl image is composed from parts, redirected by the registry alone, and
+#     shared with the node tuning init container;
 #   - the rendered Job is PSS "restricted"-compliant and the Role is scoped to
 #     this namespace by resourceNames;
 #   - global.imagePullSecrets, an Istio-convention list of bare names, reaches the
@@ -97,10 +98,11 @@ if grep -q "imagePullSecrets" "${RENDER_DIR}/no-pull-secrets.yaml"; then
 fi
 echo "OK: imagePullSecrets are named references, and absent when unset"
 
-# --- 2b. Image reference: parts, a pinned tag, and a digest that wins ---
-# The image is assembled from registry/repository/tag so a private-registry
-# install can redirect the registry alone. A pre-install hook that cannot pull
-# fails the whole release, so the assembly is checked rather than assumed.
+# --- 2b. Image reference: composed from parts, redirected by the registry alone ---
+# The hook and the node tuning init container run the same kubectl image. A cluster that
+# cannot reach ghcr.io redirects the registry and keeps the repository and the tag, so a
+# chart upgrade still moves the version. A pre-install hook that cannot pull fails the
+# whole release, so the composition is checked rather than assumed.
 image_of() {
   helm template "${HELM_RELEASE}" "${HELM_CHART_PATH}" \
     --namespace "${ISTIO_NAMESPACE}" \
@@ -112,26 +114,61 @@ image_of() {
 
 DEFAULT_IMAGE="$(image_of)"
 case "${DEFAULT_IMAGE}" in
-  *:main|*:latest) fail "patch-pss image is on a floating tag: ${DEFAULT_IMAGE}" ;;
+  *:main|*:latest) fail "the kubectl image is on a floating tag: ${DEFAULT_IMAGE}" ;;
 esac
 echo "${DEFAULT_IMAGE}" | grep -qE '^ghcr\.io/netcracker/qubership-docker-kubectl:[0-9]+\.[0-9]+\.[0-9]+$' \
-  || fail "unexpected default patch-pss image: ${DEFAULT_IMAGE}"
+  || fail "unexpected default kubectl image: ${DEFAULT_IMAGE}"
 
-REDIRECTED="$(image_of --set patchPss.image.registry=private.example.com:5000)"
+REDIRECTED="$(image_of --set global.kubectl.registry=private.example.com:5000)"
 if [ "${REDIRECTED}" != "private.example.com:5000/netcracker/qubership-docker-kubectl:${DEFAULT_IMAGE##*:}" ]; then
   fail "redirecting the registry alone did not keep repository and tag: ${REDIRECTED}"
 fi
 
-UNQUALIFIED="$(image_of --set patchPss.image.registry=)"
-if [ "${UNQUALIFIED}" != "netcracker/qubership-docker-kubectl:${DEFAULT_IMAGE##*:}" ]; then
-  fail "an empty registry did not drop the separator: ${UNQUALIFIED}"
+BY_DIGEST="$(image_of --set global.kubectl.digest=sha256:0123456789abcdef)"
+if [ "${BY_DIGEST}" != "ghcr.io/netcracker/qubership-docker-kubectl@sha256:0123456789abcdef" ]; then
+  fail "a digest did not replace the tag: ${BY_DIGEST}"
 fi
 
-BY_DIGEST="$(image_of --set patchPss.image.digest=sha256:0123456789abcdef)"
-if [ "${BY_DIGEST}" != "ghcr.io/netcracker/qubership-docker-kubectl@sha256:0123456789abcdef" ]; then
-  fail "a digest did not win over the tag: ${BY_DIGEST}"
+WHOLE="$(image_of --set global.kubectl.image=other.example.com/team/kubectl:1.2.3)"
+if [ "${WHOLE}" != "other.example.com/team/kubectl:1.2.3" ]; then
+  fail "global.kubectl.image did not replace the composed reference: ${WHOLE}"
 fi
-echo "OK: image is assembled from parts, pinned, and a digest wins over the tag"
+
+echo "OK: the kubectl image is composed from parts, and the registry redirects alone"
+
+# The hook follows the installation's pull policy, like every other container in the
+# chart, and carries no field of its own when none is set. A hardcoded policy here would
+# quietly ignore global.imagePullPolicy.
+policy_of() {
+  helm template "${HELM_RELEASE}" "${HELM_CHART_PATH}" \
+    --namespace "${ISTIO_NAMESPACE}" \
+    --set MONITORING_ENABLED=false \
+    --set ENABLE_PRIVILEGED_PSS=true \
+    "$@" --show-only templates/PatchPss.yaml \
+    | yq e -N 'select(.kind == "Job") | .spec.template.spec.containers[0].imagePullPolicy'
+}
+if [ "$(policy_of)" != "null" ]; then
+  fail "the hook pins an imagePullPolicy of its own: $(policy_of)"
+fi
+if [ "$(policy_of --set global.imagePullPolicy=Always)" != "Always" ]; then
+  fail "the hook ignores global.imagePullPolicy"
+fi
+echo "OK: the hook follows global.imagePullPolicy"
+
+# --- 2c. The same setting reaches the node tuning init container ---
+# Two callers, one reference. Checked here rather than assumed, because the point of
+# resolving the image centrally is that an installation never redirects it twice.
+INIT_IMAGES="$(helm template "${HELM_RELEASE}" "${HELM_CHART_PATH}" \
+  --namespace "${ISTIO_NAMESPACE}" \
+  --set MONITORING_ENABLED=false \
+  --set global.kubectl.registry=private.example.com:5000 \
+  | yq e -N 'select(.kind == "DaemonSet")
+             | (.spec.template.spec.initContainers // [])[]
+             | select(.name == "node-inotify-tuning") | .image' | sort -u)"
+if [ "${INIT_IMAGES}" != "private.example.com:5000/netcracker/qubership-docker-kubectl:${DEFAULT_IMAGE##*:}" ]; then
+  fail "the init container does not follow global.kubectl.registry: ${INIT_IMAGES}"
+fi
+echo "OK: the hook and the init container resolve the same image"
 
 JOB="$(yq e -N 'select(.kind == "Job" and .metadata.name == "istio-patch-pss")' "${RENDER_DIR}/on.yaml")"
 if [ "$(echo "${JOB}" | yq e '.spec.template.spec.securityContext.runAsNonRoot')" != "true" ]; then

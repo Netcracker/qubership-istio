@@ -1,3 +1,6 @@
+# ---------------------------------------------------------------------------
+# global — values every subchart sees, whatever its depth
+# ---------------------------------------------------------------------------
 global:
   profile: ambient
 
@@ -19,16 +22,26 @@ global:
   # Currently supported are: [debug, distroless]
   # variant: ""
 
-  # The node agents create inotify watchers as root, and the kernel default of 128 instances is
-  # shared with kubelet and containerd - too few on a busy node. An init container in the cni and
-  # ztunnel DaemonSets raises these limits before the agents start, and only ever upwards.
+  # Image for the Pod Security Standards hook and the node tuning init container,
+  # composed as <registry>/<repository>:<tag>. Redirect the registry alone to keep the
+  # repository and the tag as shipped.
+  kubectl:
+    # Empty means ghcr.io, unless a parent chart resolves one.
+    # registry: ""
+    repository: netcracker/qubership-docker-kubectl
+    tag: 0.0.9
+    # Used instead of the tag when set.
+    # digest: sha256:...
+    # A whole reference, replacing everything above.
+    # image: ""
+
+  # An init container in the cni and ztunnel DaemonSets raises the node's inotify limits
+  # before the agents start, and only ever upwards.
   nodeTuning:
     enabled: true
-    maxUserInstances: 8192
-    maxUserWatches: 65536
-    # The init container's image, and it must carry a shell. Unset means the agent's own
-    # image without -distroless, or whatever a parent chart resolves; set it for a digest pin.
-    # image: ""
+    inotify:
+      maxUserInstances: 8192
+      maxUserWatches: 65536
 
 # ---------------------------------------------------------------------------
 # istio-base — CRDs and cluster-scoped resources
@@ -38,7 +51,7 @@ base:
   # By default, the webhook starts with "Ignore" and istiod flips it to "Fail" once ready.
   # Set to "Fail" to avoid the flip-flop, which is useful for server-side apply tools
   base:
-    validationFailurePolicy: Fail    
+    validationFailurePolicy: Fail
 
 # ---------------------------------------------------------------------------
 # cni — CNI plugin DaemonSet
@@ -89,7 +102,7 @@ istiod:
   # By default, the webhook starts with "Ignore" and istiod flips it to "Fail" once ready.
   # Set to "Fail" to avoid the flip-flop, which is useful for server-side apply tools
   base:
-    validationFailurePolicy: Fail    
+    validationFailurePolicy: Fail
 
   # ISTIO_DUAL_STACK requires two coordinated settings:
   #
@@ -167,6 +180,9 @@ ztunnel:
       cpu: 400m
       memory: 512Mi
 
+# ---------------------------------------------------------------------------
+# monitoring — PodMonitor, ServiceMonitor and the Grafana dashboards
+# ---------------------------------------------------------------------------
 MONITORING_ENABLED: true
 monitoring:
   scrapeInterval: 15s
@@ -183,28 +199,12 @@ monitoring:
 # pod-security.kubernetes.io/enforce=privileged before Istio is installed.
 # Opt-in: it is a no-op without PSA, and namespace security labels are usually
 # owned by the cluster administrator. The label is NOT removed on uninstall.
+#
+# The hook runs the kubectl image from global.kubectl, shared with the node
+# tuning init container.
 ENABLE_PRIVILEGED_PSS: true
 
 patchPss:
-  # kubectl image for the patch Job.
-  #
-  # Split into parts so a private-registry installation can redirect the
-  # registry alone and keep the rest. It is not an Istio image and does not
-  # live under global.hub, which is the Istio hub (<hub>/pilot:<tag>) - so
-  # whatever redirects the Istio images has to redirect this one too. It is a
-  # pre-install hook: an image that cannot be pulled fails the whole release
-  # before a single Istio manifest is applied.
-  #
-  # The tag is a released one on purpose. A floating tag with
-  # imagePullPolicy: IfNotPresent leaves a node on whatever it happened to
-  # pull first, and different nodes then run different versions.
-  image:
-    registry: ghcr.io
-    repository: netcracker/qubership-docker-kubectl
-    tag: 0.0.9
-    # digest: sha256:...   # when set, used instead of tag
-  imagePullPolicy: IfNotPresent
-
   resources:
     requests:
       cpu: 75m

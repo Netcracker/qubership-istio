@@ -76,8 +76,8 @@ helm upgrade "${HELM_RELEASE}" "${HELM_CHART_PATH}" \
   --timeout 3m \
   --wait \
   --reuse-values \
-  --set global.nodeTuning.maxUserInstances="${NEW_INSTANCES}" \
-  --set global.nodeTuning.maxUserWatches="${NEW_WATCHES}"
+  --set global.nodeTuning.inotify.maxUserInstances="${NEW_INSTANCES}" \
+  --set global.nodeTuning.inotify.maxUserWatches="${NEW_WATCHES}"
 
 for ds in istio-cni-node ztunnel; do
   kubectl rollout status "daemonset/${ds}" -n "${ISTIO_NAMESPACE}" --timeout=180s

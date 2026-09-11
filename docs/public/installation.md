@@ -57,15 +57,15 @@ It requires the following cluster rights for deployment user:
     - istio-system
 ```
 
-The property runs a pre-install hook Job with the `kubectl` image assembled from
-`patchPss.image`. Redirect the registry alone when the default one is not
-reachable from the cluster; the repository and the tag stay as they are:
+The property runs a pre-install hook Job with the `kubectl` image. The node tuning init
+container runs that same image, so a cluster that cannot reach `ghcr.io` redirects the
+registry once; the repository and the tag stay as shipped, and a chart upgrade still moves
+the version:
 
 ```yaml
-qubership-istio:
-  patchPss:
-    image:
-      registry: <registry>
+global:
+  kubectl:
+    registry: <registry>
 ```
 
 
@@ -107,18 +107,17 @@ Recommended for deployments with high workload and large amount of data.
 |-------------------|-------|---------|-------------|--------------------------------------------------------------------------------------------|
 |MONITORING_ENABLED |boolean|no       |true         |Flag to install custom resources (PodMonitor and grafana dashboard) for prometheus monitoring|
 |ENABLE_PRIVILEGED_PSS|boolean|no     |true         |Label the release namespace `pod-security.kubernetes.io/enforce=privileged` from a pre-install/pre-upgrade hook Job, for clusters where Pod Security Admission would otherwise reject the Ambient Mesh pods. Needs `get` and `patch` on the namespace|
-|patchPss.image.registry|string|no    |`ghcr.io`    |Registry the PSS patch Job image is pulled from. Redirect this alone for a private registry. Leave it empty to pull the repository unqualified|
-|patchPss.image.repository|string|no  |`netcracker/qubership-docker-kubectl`|Repository of the kubectl image used by the PSS patch Job. Not an Istio image, so it is not derived from `global.hub`|
-|patchPss.image.tag |string |no       |`0.0.9`      |Tag of that image. Used only when `patchPss.image.digest` is unset|
-|patchPss.image.digest|string|no      |unset        |Digest of that image (`sha256:...`). When set, the image is pinned by digest and the tag is ignored|
-|patchPss.imagePullPolicy|string|no   |IfNotPresent |Image pull policy for the PSS patch Job                                                     |
+|global.kubectl.registry|string|no|`ghcr.io`|Registry the kubectl image is pulled from, shared by the PSS patch Job and the node tuning init container. Redirect this alone for a private registry: the repository and the tag stay as shipped|
+|global.kubectl.repository|string|no|`netcracker/qubership-docker-kubectl`|Repository of the kubectl image. Not an Istio image, so it is not derived from `global.hub`|
+|global.kubectl.tag|string|no|`0.0.9`|Tag of that image. Used only when `global.kubectl.digest` is unset|
+|global.kubectl.digest|string|no|unset|Digest of that image (`sha256:...`). When set, the image is pinned by digest and the tag is ignored|
+|global.kubectl.image|string|no|unset|Whole reference, replacing registry, repository, tag and digest at once. For an image that does not follow the shipped naming|
 |patchPss.resources |object |no       |75m/75Mi requests, 150m/150Mi limits|Resources for the PSS patch Job container                                          |
 |patchPss.podSecurityContext|object|no|`runAsNonRoot: true`, `runAsUser: 1001`, `seccompProfile.type: RuntimeDefault`|Pod security context of the PSS patch Job. Must stay compliant with the policy currently enforced on the namespace, otherwise the Job cannot be admitted in order to relax it|
 |patchPss.containerSecurityContext|object|no|no privilege escalation, drop `ALL`, read-only root filesystem|Container security context of the PSS patch Job|
-|global.nodeTuning.enabled|boolean|no|true|Run an init container in the `cni` and `ztunnel` DaemonSets that raises the node inotify limits before the agent starts. Set it to `false` where the platform already tunes them, through `/etc/sysctl.d` or a `Tuned` profile|
-|global.nodeTuning.maxUserInstances|integer|no|`8192`|Target value for `fs.inotify.max_user_instances`. The kernel default of 128 is a per-UID budget shared with kubelet and containerd, and the agents fail to start with `Too many open files` once it runs out|
-|global.nodeTuning.maxUserWatches|integer|no|`65536`|Target value for `fs.inotify.max_user_watches`|
-|global.nodeTuning.image|string|no|derived|Image of the init container, and it must carry a shell. Empty means the agent's own image with the `-distroless` suffix dropped, which is the same image with one, unless a parent chart resolves the image itself through the `custom.nodeTuning.image` template. Name it here when the Istio images are pinned by digest or renamed: the render fails rather than guessing|
+|global.nodeTuning.enabled|boolean|no|`true`|Run an init container in the `cni` and `ztunnel` DaemonSets that raises the node inotify limits before the agent starts. Set it to `false` where the platform already tunes these limits, through `/etc/sysctl.d` or a `Tuned` profile|
+|global.nodeTuning.inotify.maxUserInstances|integer|no|`8192`|Target value for `fs.inotify.max_user_instances`. The kernel default of 128 is a per-UID budget shared with kubelet and containerd, and the agents fail to start with `Too many open files` once it runs out|
+|global.nodeTuning.inotify.maxUserWatches|integer|no|`65536`|Target value for `fs.inotify.max_user_watches`|
 
 The init container writes to `/proc/sys/fs/inotify` through a `hostPath` mount, so it runs as root
 on the node. The `privileged` policy this distribution already requires on `istio-system` covers that.

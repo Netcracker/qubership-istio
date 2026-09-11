@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Adds the node inotify tuning init container to the cni and ztunnel DaemonSets:
-#   - wrap the upstream DaemonSet template as a partial
-#   - put a template in its place that renders the partial and injects the container
+#   - wrap upstream daemonset.yaml in a define, so its output can be parsed, not patched
+#   - delete the original, which would otherwise render a second DaemonSet
+#   - copy the init container spec
+#   - copy the replacement daemonset.yaml, keeping the upstream name and render order
+# @CHART@ becomes the chart name: the two charts must not share a template name.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,6 +18,6 @@ for chart in cni ztunnel; do
     echo '{{- end -}}'
   } > "${TPL_DIR}/_daemonset-upstream.tpl"
   rm "${TPL_DIR}/daemonset.yaml"
-  # Keeps the upstream file name so it keeps its place in Helm's reverse render order.
+  sed "s/@CHART@/${chart}/g" "${SCRIPT_DIR}/_node-inotify.tpl" > "${TPL_DIR}/_node-inotify.tpl"
   sed "s/@CHART@/${chart}/g" "${SCRIPT_DIR}/daemonset.yaml" > "${TPL_DIR}/daemonset.yaml"
 done

@@ -1,53 +1,37 @@
-{{- /*
+{{/*
   Stub definition for custom docker registry used by subchart tweak files.
   Returns empty string so that standalone helm template / helm lint passes
   without errors. The real implementation is expected to be provided by a
   higher-level parent chart that overrides these definitions.
-*/ -}}
-
+*/}}
 {{- define "custom.docker.registry" -}}{{- end -}}
 
-{{- /*
-  Registry override point for the patch-pss image, empty on purpose.
+{{/*
+  Stub definition for the registry the kubectl image is pulled from, used by the
+  Pod Security Standards hook and the node tuning init container. Returns empty
+  string so that the shipped registry is used instead. The real implementation is
+  expected to be provided by a higher-level parent chart that overrides these
+  definitions.
+*/}}
+{{- define "custom.kubectl.registry" -}}{{- end -}}
 
-  Same contract as custom.docker.registry above: a parent chart that knows
-  where this installation's images actually live redefines it. Used only when
-  patchPss.image.registry is empty, so an explicitly configured registry always
-  wins over whatever the parent computes.
-*/ -}}
-{{- define "custom.patchPss.registry" -}}{{- end -}}
+{{/*
+  Return the kubectl image shared by the Pod Security Standards hook and the node
+  tuning init container. Neither can run an Istio image: the ambient profile pulls
+  distroless variants, which carry no shell.
 
-{{- /*
-  Image override point for the node tuning init container, empty on purpose.
-
-  Same contract again, and here it is the whole reference rather than the registry:
-  a delivery may not carry the image this chart would otherwise derive. Consulted
-  only when global.nodeTuning.image is empty, and the derivation is what answers
-  when both are.
-*/ -}}
-{{- define "custom.nodeTuning.image" -}}{{- end -}}
-
-{{- /*
-  Image reference for the patch-pss hook, assembled from its parts.
-
-  Kept in one place because the digest case has to win over the tag in every
-  caller, and because a private-registry installation redirects the registry
-  alone - the repository and the tag stay as shipped.
-
-  Registry precedence: patchPss.image.registry, then whatever a parent chart
-  returns from custom.patchPss.registry, then none at all - which leaves the
-  repository unqualified for the container runtime to resolve.
-*/ -}}
-{{- define "qubership-istio.patchPss.image" -}}
-{{- $image := .Values.patchPss.image -}}
-{{- $registry := $image.registry | default (include "custom.patchPss.registry" .) -}}
-{{- $ref := $image.repository -}}
-{{- if $registry -}}
-{{- $ref = printf "%s/%s" $registry $image.repository -}}
-{{- end -}}
-{{- if $image.digest -}}
-{{- printf "%s@%s" $ref $image.digest -}}
+  Composed from its parts, so redirecting the registry alone leaves the repository
+  and the tag as shipped, and a chart upgrade still moves the version. The registry
+  is global.kubectl.registry, then custom.kubectl.registry, then the shipped one. A
+  digest replaces the tag, and global.kubectl.image replaces the whole reference.
+*/}}
+{{- define "qubership.kubectl.image" -}}
+{{- $k := dig "kubectl" dict .Values.global -}}
+{{- if $k.image -}}
+{{- $k.image -}}
 {{- else -}}
-{{- printf "%s:%s" $ref $image.tag -}}
+{{- $registry := $k.registry | default (include "custom.kubectl.registry" .) | default "ghcr.io" -}}
+{{- $ref := printf "%s/%s" $registry $k.repository -}}
+{{- if $k.digest -}}{{- printf "%s@%s" $ref $k.digest -}}{{- else -}}{{- printf "%s:%s" $ref $k.tag -}}{{- end -}}
 {{- end -}}
 {{- end -}}
