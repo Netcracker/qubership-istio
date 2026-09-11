@@ -4,6 +4,7 @@
   - [Kubernetes](#kubernetes)
     - [Gateway API](#gateway-api)
     - [Pod Security Admission](#pod-security-admission)
+  - [RBAC](#rbac)
 - [Best practices and recommendations](#best-practices-and-recommendations)
   - [HWE](#hwe)
 - [Parameters](#parameters)
@@ -91,6 +92,13 @@ global:
     registry: <registry>
 ```
 
+
+## RBAC
+No cluster entity has to be created by hand. The chart creates every identity and permission it needs, which is what the cluster-admin service account in [Common](#common) is for.
+
+The release reaches past its namespace: Istio's CRDs, the ClusterRoles and bindings for istiod and the CNI, and the validating and mutating webhook configurations are all cluster-scoped.
+
+This distribution narrows the upstream `istiod` ClusterRole. Write verbs on webhook configurations are restricted by `resourceNames` to istiod's own webhooks, while `list` and `watch` stay cluster-wide.
 
 # Best practices and recommendations
 ## HWE
