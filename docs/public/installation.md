@@ -13,6 +13,7 @@
 - [Installation](#installation)
   - [Before you begin](#before-you-begin)
   - [On-prem](#on-prem)
+  - [Post-deployment check](#post-deployment-check)
 - [Upgrade](#upgrade)
 - [Rollback](#rollback)
 <!-- /TOC -->
@@ -198,6 +199,35 @@ Not applicable
 Not applicable
 ### Non-HA scheme
 Not applicable
+
+## Post-deployment check
+The release brings up three workloads, and all three have to report a completed rollout:
+
+```bash
+kubectl rollout status deployment/istiod -n istio-system
+kubectl rollout status daemonset/istio-cni-node -n istio-system
+kubectl rollout status daemonset/ztunnel -n istio-system
+```
+
+`istio-cni-node` and `ztunnel` are DaemonSets, so each command returns only once the pod is ready on every node the DaemonSet targets. Workloads on a node that carries neither pod stay outside the mesh.
+
+A DaemonSet that stays at 0 ready pods is usually Pod Security Admission rejecting them. The DaemonSet status does not say so; the rejection is in the events:
+
+```bash
+kubectl get events -n istio-system --field-selector reason=FailedCreate
+```
+
+See [Pod Security Admission](#pod-security-admission) for the fix.
+
+With `MONITORING_ENABLED` left at `true`, the release also creates the monitoring resources:
+
+```bash
+kubectl get servicemonitor istiod-monitor -n istio-system
+kubectl get podmonitor ztunnel-monitor istio-cni-node-monitor -n istio-system
+kubectl get grafanadashboard istio-control-plane-dashboard istio-ztunnel-dashboard -n istio-system
+```
+
+A healthy release carries no traffic on its own. Workloads reach the mesh only after their namespace is enrolled, see [Namespace Enrollment into Istio Ambient Mesh](namespace-enrollment.md).
 
 # Upgrade
 Install and upgrade procedures are identical.
