@@ -7,6 +7,8 @@
   - [HWE](#hwe)
 - [Parameters](#parameters)
   - [qubership-istio](#qubership-istio)
+  - [Subchart values](#subchart-values)
+    - [Keys written by a profile](#keys-written-by-a-profile)
 - [Installation](#installation)
   - [Before you begin](#before-you-begin)
   - [On-prem](#on-prem)
@@ -126,13 +128,55 @@ A limit is raised only when the node sits below the target, so a node tuned high
 value. The container never fails the pod. Neither DaemonSet sets `updateStrategy`, so both roll at
 the Kubernetes default of `maxSurge: 0`: a pod that cannot start leaves the node without its agent.
 
-In Helm values you can provide any configuration parameters supported by corresponding vanilla Istio helm chart, e.g. to set default connectTimeout for `istiod`:
+In Helm values you can set these parameters, for example to raise the inotify limits:
+
 ```yaml
-qubership-istio: # root helm chart
-  istiod: # nested helm chart
-    meshConfig:
-      defaultConfig:
-        connectTimeout: 5s
+global:
+  nodeTuning:
+    inotify:
+      maxUserInstances: 16384
+      maxUserWatches: 524288
+```
+
+## Subchart values
+
+Set values for the Istio components at the top level of the values file, under the name of their subchart: `base`,
+`cni`, `istiod`, and `ztunnel`. Each block accepts the values of the matching vanilla Istio chart. Values that all of
+them read, such as `global.platform`, go under `global`.
+
+```yaml
+cni:
+  resources:
+    limits:
+      memory: 1Gi
+istiod:
+  meshConfig:
+    connectTimeout: 5s
+```
+
+### Keys written by a profile
+
+A profile writes the keys below into a nested block, `cni.cni` or `istiod.pilot`, and that block overrides the top
+level of the chart. Set these keys in the nested form: a top-level value for them is ignored.
+
+| Key | Written by | Set it as |
+|---|---|---|
+| `ambient.enabled` of `cni` | `ambient` profile, always on in this distribution | `cni.cni.ambient.enabled` |
+| `env.PILOT_ENABLE_AMBIENT` of `istiod` | `ambient` profile | `istiod.pilot.env.PILOT_ENABLE_AMBIENT` |
+| `cniBinDir`, `cniConfDir`, `cniNetnsDir`, `resourceQuotas` of `cni` | the profile selected by `global.platform` | `cni.cni.<key>` |
+
+Other profiles, such as `platform-openshift` or a `compatibilityVersion`, write more keys: the full list is under
+`cni:` and `pilot:` in the chart's `files/profile-*.yaml`. Any key no profile writes works in either form. `ztunnel`
+has no nested block.
+
+For example, to set the CNI binary directory when `global.platform` is `gke`:
+
+```yaml
+global:
+  platform: gke
+cni:
+  cni:
+    cniBinDir: /home/kubernetes/bin
 ```
 
 # Installation
