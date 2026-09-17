@@ -2,14 +2,19 @@
 - [Prerequisites](#prerequisites)
   - [Common](#common)
   - [Kubernetes](#kubernetes)
+    - [Gateway API](#gateway-api)
     - [Pod Security Admission](#pod-security-admission)
+  - [RBAC](#rbac)
 - [Best practices and recommendations](#best-practices-and-recommendations)
   - [HWE](#hwe)
 - [Parameters](#parameters)
   - [qubership-istio](#qubership-istio)
+  - [Istio subcharts](#istio-subcharts)
+    - [What the distribution presets](#what-the-distribution-presets)
 - [Installation](#installation)
   - [Before you begin](#before-you-begin)
   - [On-prem](#on-prem)
+  - [Post-deployment check](#post-deployment-check)
 - [Upgrade](#upgrade)
 - [Rollback](#rollback)
 <!-- /TOC -->
@@ -33,7 +38,26 @@ Qubership Istio should be installed under the service account with cluster-admin
 ## Kubernetes
 Supported k8s versions: 1.31, 1.32, 1.33, 1.34, 1.35.
 
-Kubernetes Gateway API CRDs are not included into this distro - they should be preinstalled on the cluster.
+### Gateway API
+The Kubernetes Gateway API CRDs are not part of this distribution. Install them on the cluster before the chart: without them no `Gateway` or `HTTPRoute` can exist, and a namespace labeled `istio.io/use-waypoint` gets no waypoint, because a waypoint is itself a `Gateway`.
+
+The standard channel is enough. v1.2.1 is the version this distribution is verified against:
+
+```bash
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
+```
+
+The CRDs are cluster-scoped, so check whether the cluster already has them:
+
+```bash
+kubectl get crd gateways.gateway.networking.k8s.io
+```
+
+Applying a `Gateway` without them fails with:
+
+```text
+no matches for kind "Gateway" in version "gateway.networking.k8s.io/v1"
+```
 
 ### Pod Security Admission
 Istio Ambient Mesh requires privileged pods: `istio-cni` and `ztunnel` need `hostNetwork` together with the `NET_ADMIN` and `SYS_ADMIN` capabilities.
@@ -68,6 +92,13 @@ global:
     registry: <registry>
 ```
 
+
+## RBAC
+No cluster entity has to be created by hand. The chart creates every identity and permission it needs, which is what the cluster-admin service account in [Common](#common) is for.
+
+The release reaches past its namespace: Istio's CRDs, the ClusterRoles and bindings for istiod and the CNI, and the validating and mutating webhook configurations are all cluster-scoped.
+
+This distribution narrows the upstream `istiod` ClusterRole. Write verbs on webhook configurations are restricted by `resourceNames` to istiod's own webhooks, while `list` and `watch` stay cluster-wide.
 
 # Best practices and recommendations
 ## HWE
@@ -126,14 +157,40 @@ A limit is raised only when the node sits below the target, so a node tuned high
 value. The container never fails the pod. Neither DaemonSet sets `updateStrategy`, so both roll at
 the Kubernetes default of `maxSurge: 0`: a pod that cannot start leaves the node without its agent.
 
-In Helm values you can provide any configuration parameters supported by corresponding vanilla Istio helm chart, e.g. to set default connectTimeout for `istiod`:
-```yaml
-qubership-istio: # root helm chart
-  istiod: # nested helm chart
-    meshConfig:
-      defaultConfig:
-        connectTimeout: 5s
+## Istio subcharts
+Every value of the vanilla `base`, `cni`, `istiod`, and `ztunnel` charts can be set here, under the subchart key. This distribution pins them at 1.30.2; read the full list from the charts themselves:
+
+```bash
+helm repo add istio https://istio-release.storage.googleapis.com/charts
+helm show values istio/istiod --version 1.30.2
 ```
+
+Values are nested one level under the subchart name, for example to set `connectTimeout` for `istiod`:
+
+```yaml
+istiod:
+  meshConfig:
+    defaultConfig:
+      connectTimeout: 5s
+```
+
+Prefix the whole block with `qubership-istio:` when this chart is installed as a dependency of a parent chart.
+
+### What the distribution presets
+The values below are set by this chart; everything else keeps the vanilla default. Each can be overridden.
+
+| Value                                                                                             |Set to| Effect of changing it                                                                                                                                                                            |
+|---------------------------------------------------------------------------------------------------|------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `global.profile`                                                                                  |`ambient`| Ambient mode is the only mode this distribution ships and tests                                                                                                                                  |
+| `global.proxy.privileged`                                                                         |`false`| Proxies run unprivileged. `istio-cni-node` and `ztunnel` are privileged regardless, see [Pod Security Admission](#pod-security-admission)                                                        |
+| `base.base.validationFailurePolicy`, `istiod.base.validationFailurePolicy`                        |`Fail`| The validating webhook rejects invalid Istio config from the start. The vanilla `Ignore` lets istiod flip the policy once it is ready, which server-side apply tools see as a change on every run |
+| `istiod.meshConfig.accessLogFile`                                                                 |`/dev/stdout`| Proxy access logs go to the pod log. Empty turns them off                                                                                                                                        |
+| `istiod.meshConfig.defaultConfig.gatewayTopology.numTrustedProxies`                               |`1`| How many proxies sit in front of a gateway, which decides the client address a gateway reads from `X-Forwarded-For`. Set it to the real number of hops, otherwise the address is wrong           |
+| `istiod.gatewayClasses.istio.service.spec.type`                                                   |`ClusterIP`| Gateways created from the `istio` class get no cloud load balancer. Set `LoadBalancer` where one is wanted                                                                                       |
+| `istiod.env.ISTIO_DUAL_STACK` and `istiod.meshConfig.defaultConfig.proxyMetadata.ISTIO_DUAL_STACK` |`"false"`| Dual-stack support. Both have to be changed together: the mesh config carries the flag into gateway pods, and only a restarted istiod reconciles existing gateways with it                       |
+| `ztunnel.meshConfig.defaultConfig.proxyMetadata`                                                  |`ISTIO_META_DNS_CAPTURE: "true"`, `ISTIO_META_ROUTER_MODE: "sni-dnat"`| Proxy metadata the chart sets for ztunnel                                                                                                                                                        |
+| `seccompProfile.type` on `global.proxy`, `cni`, `istiod`, and `istiod.gateways`                   |`RuntimeDefault`| Pods stay admissible under the `baseline` and `restricted` Pod Security Standards                                                                                                                |
+| `resources` on `cni`, `istiod`, `ztunnel`                                                         |see [HWE](#hwe)| Requests and limits for the three components                                                                                                                                                     |
 
 # Installation
 ## Before you begin
@@ -149,6 +206,35 @@ Not applicable
 Not applicable
 ### Non-HA scheme
 Not applicable
+
+## Post-deployment check
+The release brings up three workloads, and all three have to report a completed rollout:
+
+```bash
+kubectl rollout status deployment/istiod -n istio-system
+kubectl rollout status daemonset/istio-cni-node -n istio-system
+kubectl rollout status daemonset/ztunnel -n istio-system
+```
+
+`istio-cni-node` and `ztunnel` are DaemonSets, so each command returns only once the pod is ready on every node the DaemonSet targets. Workloads on a node that carries neither pod stay outside the mesh.
+
+A DaemonSet that stays at 0 ready pods is usually Pod Security Admission rejecting them. The DaemonSet status does not say so; the rejection is in the events:
+
+```bash
+kubectl get events -n istio-system --field-selector reason=FailedCreate
+```
+
+See [Pod Security Admission](#pod-security-admission) for the fix.
+
+With `MONITORING_ENABLED` left at `true`, the release also creates the monitoring resources:
+
+```bash
+kubectl get servicemonitor istiod-monitor -n istio-system
+kubectl get podmonitor ztunnel-monitor istio-cni-node-monitor -n istio-system
+kubectl get grafanadashboard istio-control-plane-dashboard istio-ztunnel-dashboard -n istio-system
+```
+
+A healthy release carries no traffic on its own. Workloads reach the mesh only after their namespace is enrolled, see [Namespace Enrollment into Istio Ambient Mesh](namespace-enrollment.md).
 
 # Upgrade
 Install and upgrade procedures are identical.
