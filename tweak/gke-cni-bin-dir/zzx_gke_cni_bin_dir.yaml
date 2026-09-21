@@ -1,0 +1,13 @@
+{{- /*
+  Picks the CNI binary directory for the gke platform when none is given.
+
+  Upstream selects /home/kubernetes/bin only when the Kubernetes version contains "-gke".
+  A render that does not see the real cluster version misses that suffix: Argo CD drops
+  vendor suffixes before it calls Helm, and a plain `helm template` uses its own default.
+  The DaemonSet then falls back to /opt/cni/bin, which is read-only on Container-Optimized OS.
+
+  An explicit cniBinDir still wins.
+*/ -}}
+{{- if and (eq ((coalesce .Values.global.platform .Values.platform) | default "") "gke") (not .Values.cniBinDir) -}}
+{{- $_ := set .Values "cniBinDir" "/home/kubernetes/bin" -}}
+{{- end -}}
