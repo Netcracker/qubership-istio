@@ -9,8 +9,8 @@
 - [Best practices and recommendations](#best-practices-and-recommendations)
   - [HWE](#hwe)
 - [Parameters](#parameters)
-  - [qubership-istio](#qubership-istio)
-  - [Istio subcharts](#istio-subcharts)
+  - [General parameters](#general-parameters)
+  - [Istio parameters](#istio-parameters)
     - [What the distribution presets](#what-the-distribution-presets)
 - [Installation](#installation)
   - [Before you begin](#before-you-begin)
@@ -140,7 +140,9 @@ Recommended for deployments with high workload and large amount of data.
 |**Total**   |**4600m**|**12400m**|**3328**|**9216**  |
 
 # Parameters
-## qubership-istio
+Every parameter on this page, the Istio ones included, is a top-level key of the values passed to this chart.
+
+## General parameters
 |Parameter          |Type   |Mandatory|Default value|Description                                                                                 |
 |-------------------|-------|---------|-------------|--------------------------------------------------------------------------------------------|
 |MONITORING_ENABLED |boolean|no       |true         |Flag to install custom resources (PodMonitor and grafana dashboard) for prometheus monitoring|
@@ -164,15 +166,17 @@ A limit is raised only when the node sits below the target, so a node tuned high
 value. The container never fails the pod. Neither DaemonSet sets `updateStrategy`, so both roll at
 the Kubernetes default of `maxSurge: 0`: a pod that cannot start leaves the node without its agent.
 
-## Istio subcharts
-Every value of the vanilla `base`, `cni`, `istiod`, and `ztunnel` charts can be set here, under the subchart key. Read the full list from the pinned subchart itself, so the version always matches the one this distribution ships:
+## Istio parameters
+Every value of the vanilla Istio charts `base`, `cni`, `istiod`, and `ztunnel` can be set under the top-level key of the same name. Read the full list from the pinned chart itself, so the version always matches the one this distribution ships:
 
 ```bash
 helm dependency build helm-templates/qubership-istio
 helm show values helm-templates/qubership-istio/charts/istiod-*.tgz
 ```
 
-Values are nested one level under the subchart name, for example to set `connectTimeout` for `istiod`:
+`helm show values` prints the defaults under `_internal_defaults_do_not_set`. Leave that key out when you set a value.
+
+For example, to set `connectTimeout` for `istiod`:
 
 ```yaml
 istiod:
@@ -180,8 +184,6 @@ istiod:
     defaultConfig:
       connectTimeout: 5s
 ```
-
-Prefix the whole block with `qubership-istio:` when this chart is installed as a dependency of a parent chart.
 
 ### What the distribution presets
 The values below are set by this chart; everything else keeps the vanilla default. Each can be overridden.
