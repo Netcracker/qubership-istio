@@ -5,6 +5,7 @@
     - [Gateway API](#gateway-api)
     - [Pod Security Admission](#pod-security-admission)
   - [RBAC](#rbac)
+  - [Monitoring](#monitoring)
 - [Best practices and recommendations](#best-practices-and-recommendations)
   - [HWE](#hwe)
 - [Parameters](#parameters)
@@ -41,7 +42,7 @@ Supported k8s versions: 1.31, 1.32, 1.33, 1.34, 1.35.
 ### Gateway API
 The Kubernetes Gateway API CRDs are not part of this distribution. Install them on the cluster before the chart: without them no `Gateway` or `HTTPRoute` can exist, and a namespace labeled `istio.io/use-waypoint` gets no waypoint, because a waypoint is itself a `Gateway`.
 
-Istio names the Gateway API version that goes with each of its releases, so take the install command from [the Istio 1.30 ambient install guide](https://istio.io/v1.30/docs/ambient/install/helm/).
+Istio names the Gateway API version that goes with each of its releases, so take the version from [the Istio 1.30 ambient install guide](https://istio.io/v1.30/docs/ambient/install/helm/) and apply `standard-install.yaml`. The guide installs the experimental channel, a superset that this distribution does not need.
 
 The CRDs are cluster-scoped, so check whether the cluster already has them:
 
@@ -95,6 +96,16 @@ No cluster entity has to be created by hand. The chart creates every identity an
 The release reaches past its namespace: Istio's CRDs, the ClusterRoles and bindings for istiod and the CNI, and the validating and mutating webhook configurations are all cluster-scoped.
 
 This distribution narrows the upstream `istiod` ClusterRole. Write verbs on webhook configurations are restricted by `resourceNames` to istiod's own webhooks, while `list` and `watch` stay cluster-wide.
+
+## Monitoring
+`MONITORING_ENABLED` defaults to `true`, and the release then carries a `ServiceMonitor`, two `PodMonitor`s, and two `GrafanaDashboard`s. Their CRDs have to be on the cluster first, otherwise `helm install` fails before a single Istio manifest is applied:
+
+- `monitoring.coreos.com/v1`, from the Prometheus Operator
+- `integreatly.org/v1alpha1`, from grafana-operator v4. Version 5 serves `grafana.integreatly.org/v1beta1` and does not satisfy this
+
+For how to install them, see [the qubership-monitoring-operator deployment guide](https://github.com/Netcracker/qubership-monitoring-operator/blob/main/docs/installation/deploy.md).
+
+Set `MONITORING_ENABLED=false` if you do not need monitoring.
 
 # Best practices and recommendations
 ## HWE
