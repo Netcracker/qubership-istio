@@ -174,8 +174,6 @@ helm dependency build helm-templates/qubership-istio
 helm show values helm-templates/qubership-istio/charts/istiod-*.tgz
 ```
 
-`helm show values` prints the defaults under `_internal_defaults_do_not_set`. Leave that key out when you set a value.
-
 For example, to set `connectTimeout` for `istiod`:
 
 ```yaml
