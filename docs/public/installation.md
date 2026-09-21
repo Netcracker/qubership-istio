@@ -10,7 +10,6 @@
 - [Parameters](#parameters)
   - [qubership-istio](#qubership-istio)
   - [Istio subcharts](#istio-subcharts)
-    - [Keys a profile writes](#keys-a-profile-writes)
     - [What the distribution presets](#what-the-distribution-presets)
 - [Installation](#installation)
   - [Before you begin](#before-you-begin)
@@ -173,35 +172,6 @@ istiod:
   meshConfig:
     defaultConfig:
       connectTimeout: 5s
-```
-
-Write these at the top level of the values file, which is what the [Installation](#installation) commands pass. A
-values file that nests them under `qubership-istio` reaches nothing: that name belongs to the chart, and it becomes
-part of a value path only for someone who pulls this chart into one of their own as a dependency.
-
-### Keys a profile writes
-
-A profile writes some of these values into a nested block, `cni.cni` or `istiod.pilot`, and that block wins over the
-top level of the subchart. Set the keys below in the nested form; a top-level value for them is ignored.
-
-| Key | Written by | Set it as |
-|---|---|---|
-| `ambient.enabled` of `cni` | the `ambient` profile, which this distribution always applies | `cni.cni.ambient.enabled` |
-| `env.PILOT_ENABLE_AMBIENT` of `istiod` | the `ambient` profile | `istiod.pilot.env.PILOT_ENABLE_AMBIENT` |
-| `cniBinDir`, `cniConfDir`, `cniNetnsDir`, `resourceQuotas` of `cni` | the profile named by `global.platform` | `cni.cni.<key>` |
-
-Other profiles write more keys: a `platform-*` profile and a `compatibilityVersion` each bring their own, and the full
-list is under `cni:` and `pilot:` in the chart's `files/profile-*.yaml`. A key no profile writes works in either form,
-and `ztunnel` has no nested block.
-
-For example, the `k3s` profile sets `cniBinDir`, so an override for it goes in the nested block:
-
-```yaml
-global:
-  platform: k3s
-cni:
-  cni:
-    cniBinDir: /custom/cni/bin
 ```
 
 ### What the distribution presets
