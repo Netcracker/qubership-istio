@@ -41,11 +41,7 @@ Supported k8s versions: 1.31, 1.32, 1.33, 1.34, 1.35.
 ### Gateway API
 The Kubernetes Gateway API CRDs are not part of this distribution. Install them on the cluster before the chart: without them no `Gateway` or `HTTPRoute` can exist, and a namespace labeled `istio.io/use-waypoint` gets no waypoint, because a waypoint is itself a `Gateway`.
 
-The standard channel is enough. v1.2.1 is the version this distribution is verified against:
-
-```bash
-kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
-```
+Istio names the Gateway API version that goes with each of its releases, so take the install command from [the Istio 1.30 ambient install guide](https://istio.io/v1.30/docs/ambient/install/helm/).
 
 The CRDs are cluster-scoped, so check whether the cluster already has them:
 
@@ -158,11 +154,11 @@ value. The container never fails the pod. Neither DaemonSet sets `updateStrategy
 the Kubernetes default of `maxSurge: 0`: a pod that cannot start leaves the node without its agent.
 
 ## Istio subcharts
-Every value of the vanilla `base`, `cni`, `istiod`, and `ztunnel` charts can be set here, under the subchart key. This distribution pins them at 1.30.2; read the full list from the charts themselves:
+Every value of the vanilla `base`, `cni`, `istiod`, and `ztunnel` charts can be set here, under the subchart key. Read the full list from the pinned subchart itself, so the version always matches the one this distribution ships:
 
 ```bash
-helm repo add istio https://istio-release.storage.googleapis.com/charts
-helm show values istio/istiod --version 1.30.2
+helm dependency build helm-templates/qubership-istio
+helm show values helm-templates/qubership-istio/charts/istiod-*.tgz
 ```
 
 Values are nested one level under the subchart name, for example to set `connectTimeout` for `istiod`:
@@ -189,7 +185,7 @@ The values below are set by this chart; everything else keeps the vanilla defaul
 | `istiod.gatewayClasses.istio.service.spec.type`                                                   |`ClusterIP`| Gateways created from the `istio` class get no cloud load balancer. Set `LoadBalancer` where one is wanted                                                                                       |
 | `istiod.env.ISTIO_DUAL_STACK` and `istiod.meshConfig.defaultConfig.proxyMetadata.ISTIO_DUAL_STACK` |`"false"`| Dual-stack support. Both have to be changed together: the mesh config carries the flag into gateway pods, and only a restarted istiod reconciles existing gateways with it                       |
 | `ztunnel.meshConfig.defaultConfig.proxyMetadata`                                                  |`ISTIO_META_DNS_CAPTURE: "true"`, `ISTIO_META_ROUTER_MODE: "sni-dnat"`| Proxy metadata the chart sets for ztunnel                                                                                                                                                        |
-| `seccompProfile.type` on `global.proxy`, `cni`, `istiod`, and `istiod.gateways`                   |`RuntimeDefault`| Pods stay admissible under the `baseline` and `restricted` Pod Security Standards                                                                                                                |
+| `seccompProfile.type` on `global.proxy`, `cni`, `istiod`, and `istiod.gateways`                   |`RuntimeDefault`| Keeps the istiod and gateway pods admissible under `restricted`. No effect on the admission of `istio-cni-node` or `ztunnel`, which need `privileged` regardless |
 | `resources` on `cni`, `istiod`, `ztunnel`                                                         |see [HWE](#hwe)| Requests and limits for the three components                                                                                                                                                     |
 
 # Installation
