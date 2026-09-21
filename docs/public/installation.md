@@ -26,9 +26,9 @@ This is Qubership Istio Ambient Mesh Distribution. It includes vanilla Istio Amb
 
 This distribution Helm chart has the following structure:
 
-- `qubership-istio` - Docker registry override; monitoring resources.
+- `qubership-istio` - the chart you install. On top of the Istio charts below it adds monitoring resources, the Pod Security Admission hook, the node inotify tuning, a narrower `istiod` ClusterRole, and the values listed in [What the distribution presets](#what-the-distribution-presets).
   - `base` - resources shared by all Istio revisions. This includes Istio CRDs.
-  - `cni`- Istio CNI Plugin.
+  - `cni` - Istio CNI Plugin.
   - `ztunnel` - Istio ztunnel.
   - `istiod` - istiod (pilot) - Istio control plane.
 
