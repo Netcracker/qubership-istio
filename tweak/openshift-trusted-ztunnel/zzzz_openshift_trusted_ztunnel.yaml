@@ -1,13 +1,7 @@
 {{- /*
-  Trusts the ztunnel of this release on the openshift platform when no namespace is given.
-
-  The upstream openshift profile sets trustedZtunnelNamespace to kube-system, where Istio
-  installs ztunnel on OpenShift. This distribution installs ztunnel in the release namespace,
-  so istiod would refuse certificates to it and pods in ambient would get none.
-
-  Before zzz_profile.yaml runs, .Values holds only the values the user set: the chart defaults
-  sit under _internal_defaults_do_not_set. Setting the key here makes it a user value, which
-  the profile does not override. An explicit trustedZtunnelNamespace still wins.
+  On openshift, istiod trusts ztunnel in the release namespace unless trustedZtunnelNamespace is set.
+  The openshift profile points it at kube-system, while this chart installs ztunnel here.
+  This file renders before zzz_profile.yaml, so the value counts as user input and wins over the profile.
 */ -}}
 {{- if and (eq ((coalesce .Values.platform (dig "platform" "" (.Values.global | default dict))) | default "") "openshift") (not (hasKey .Values "trustedZtunnelNamespace")) -}}
 {{- $_ := set .Values "trustedZtunnelNamespace" .Release.Namespace -}}
