@@ -6,8 +6,12 @@
   vendor suffixes before it calls Helm, and a plain `helm template` uses its own default.
   The DaemonSet then falls back to /opt/cni/bin, which is read-only on Container-Optimized OS.
 
-  An explicit cniBinDir still wins.
+  An explicit cniBinDir still wins, in either form. The value is read from the user input
+  that zzz_profile.yaml keeps under _original, because by now zzy_descope_legacy.yaml has
+  copied the profile's empty cni.cniBinDir over a top-level one.
 */ -}}
-{{- if and (eq ((coalesce .Values.global.platform .Values.platform) | default "") "gke") (not .Values.cniBinDir) -}}
-{{- $_ := set .Values "cniBinDir" "/home/kubernetes/bin" -}}
+{{- if eq ((coalesce .Values.global.platform .Values.platform) | default "") "gke" -}}
+{{- $original := .Values._original | default dict | toYaml | fromYaml -}}
+{{- $explicit := coalesce (dig "cni" "cniBinDir" "" $original) (dig "cniBinDir" "" $original) -}}
+{{- $_ := set .Values "cniBinDir" (default "/home/kubernetes/bin" $explicit) -}}
 {{- end -}}
