@@ -32,11 +32,16 @@ sub-chart name in your values file. For example:
         memory: 512Mi
 
 Pod Security Standards:
-{{- if .Values.ENABLE_PRIVILEGED_PSS }}
+{{- if include "qubership.patchPss.enabled" . }}
 
   A pre-install/pre-upgrade hook labelled namespace {{ .Release.Namespace }} with
   pod-security.kubernetes.io/enforce=privileged. The label is left in place by
   `helm uninstall`; remove it manually if the namespace is reused.
+{{- else if eq (dig "platform" "" (.Values.global | default dict) | default "") "openshift" }}
+
+  On OpenShift the istio-cni and ztunnel pods are admitted by the privileged
+  SecurityContextConstraints, which the chart grants to their service accounts.
+  The namespace label is not needed, and the hook that sets it is skipped.
 {{- else }}
 
   Istio ambient requires privileged pods (istio-cni and ztunnel). If this cluster

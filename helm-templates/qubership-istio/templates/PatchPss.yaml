@@ -1,4 +1,4 @@
-{{- if .Values.ENABLE_PRIVILEGED_PSS }}
+{{- if include "qubership.patchPss.enabled" . }}
 ---
 # Identity for the patch-pss Job. Weight 0 so it exists before the Job (weight 1).
 apiVersion: v1
