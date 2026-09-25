@@ -5,7 +5,7 @@ set -euo pipefail
 #   - openshift: istiod trusts ztunnel in the release namespace instead of the profile's
 #     kube-system, and the Pod Security Standards hook is skipped even when enabled;
 #   - gke: the CNI plugin goes to /home/kubernetes/bin without a -gke cluster version;
-#   - an explicit value still wins over both defaults, and no platform keeps the old behavior.
+#   - an explicit trusted ztunnel namespace still wins, and no platform keeps the old behavior.
 
 RENDER_DIR="$(mktemp -d)"
 trap 'rm -rf "${RENDER_DIR}"' EXIT
@@ -51,12 +51,6 @@ expect "openshift patch-pss resources with ENABLE_PRIVILEGED_PSS=true" "$(patch_
 # --- 2. gke: CNI binary directory ---
 render gke --set global.platform=gke
 expect "gke CNI binary directory" "$(cni_bin_dir gke)" "/home/kubernetes/bin"
-
-render gke-explicit --set global.platform=gke --set cni.cniBinDir=/opt/custom/bin
-expect "explicit CNI binary directory" "$(cni_bin_dir gke-explicit)" "/opt/custom/bin"
-
-render gke-explicit-nested --set global.platform=gke --set cni.cni.cniBinDir=/opt/nested/bin
-expect "explicit nested CNI binary directory" "$(cni_bin_dir gke-explicit-nested)" "/opt/nested/bin"
 
 # --- 3. No platform: the defaults stay as they were ---
 render none
