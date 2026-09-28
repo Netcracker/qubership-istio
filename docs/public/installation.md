@@ -4,6 +4,7 @@
   - [Kubernetes](#kubernetes)
     - [Gateway API](#gateway-api)
     - [Pod Security Admission](#pod-security-admission)
+  - [GKE](#gke)
   - [RBAC](#rbac)
   - [Monitoring](#monitoring)
 - [Best practices and recommendations](#best-practices-and-recommendations)
@@ -89,6 +90,22 @@ global:
     registry: <registry>
 ```
 
+## GKE
+Supported versions: GKE clusters on the [supported Kubernetes versions](#kubernetes). A GKE version is the Kubernetes version with a `-gke` suffix, for example `1.35.6-gke.1250000`.
+
+Set this value:
+
+```yaml
+global:
+  platform: gke
+```
+
+This value does two things:
+
+- The Istio [GKE profile](https://github.com/istio/istio/blob/1.30.4/manifests/helm-profiles/platform-gke.yaml) makes the `cni` and `ztunnel` charts render ResourceQuotas for the `system-node-critical` priority class, which both agents run with. GKE admits such pods only into a namespace with that quota. Without it the DaemonSets create no pods: `insufficient quota to match these scopes`.
+- The CNI plugin goes to `/home/kubernetes/bin`, where GKE looks for it. The upstream chart picks that directory only when the Kubernetes version it renders for contains `-gke`, and Argo CD passes the version without vendor suffixes, so this distribution sets it for `gke` itself. A `cni.cniBinDir` you set explicitly still takes precedence.
+
+Gateway API and Pod Security Admission need nothing beyond [Kubernetes](#kubernetes).
 
 ## RBAC
 No cluster entity has to be created by hand. The chart creates every identity and permission it needs, which is what the cluster-admin service account in [Common](#common) is for.
