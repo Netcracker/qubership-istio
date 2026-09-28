@@ -23,6 +23,7 @@
   - [Post-deployment check](#post-deployment-check)
 - [Upgrade](#upgrade)
 - [Rollback](#rollback)
+- [Uninstall](#uninstall)
 <!-- /TOC -->
 
 # Prerequisites
@@ -317,6 +318,48 @@ Install and upgrade procedures are identical.
 # Rollback
 Sync the Argo CD Application to the previous chart version.
 
+# Uninstall
+Istio reaches every pod in the cluster: the CNI plugin takes part in creating each pod on every node, and every pod in the mesh sends its traffic and DNS queries through ztunnel. Remove it in the order below. Deleting the `istio-system` namespace instead leaves the nodes and the pods of the mesh broken, see [`istio-system` was deleted](troubleshooting.md#istio-system-was-deleted).
+
+1. Take the workloads out of the mesh. Find the enrolled namespaces and remove both labels from each:
+
+   ```bash
+   kubectl get namespaces -l istio.io/dataplane-mode=ambient
+   kubectl label namespace <namespace> istio.io/dataplane-mode- istio.io/use-waypoint-
+   ```
+
+   The CNI agent takes the running pods out of the mesh within seconds, without restarting them. Wait until this command prints nothing:
+
+   ```bash
+   kubectl get pods -A -o jsonpath='{range .items[?(@.metadata.annotations.ambient\.istio\.io/redirection=="enabled")]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}'
+   ```
+
+   A pod that is still in the mesh when ztunnel goes away keeps redirecting its outbound traffic and DNS queries to it, and loses both until it is recreated.
+
+   Applications deployed in Istio mode, for example those that create `Gateway` resources of the `istio` or `istio-waypoint` class, stop working without Istio. Redeploy them without Istio before this step.
+
+2. Delete the Argo CD Application with cascade, the default, so that Argo CD deletes the resources it created. Let the pods stop on their own: do not delete the `istio-system` namespace and do not force-delete pods.
+
+   The CNI agent removes its plugin from the node only if its DaemonSet is already deleted when the agent stops. If the agent pods stop first, as they do when the namespace is deleted, each agent takes it for an upgrade and leaves the plugin on its node, and every new pod on that node fails, see [New pods fail with `istio-cni` `Unauthorized`](troubleshooting.md#new-pods-fail-with-istio-cni-unauthorized).
+
+3. Wait until no pod is left in `istio-system`, then check that new pods start on every node:
+
+   ```bash
+   kubectl get pods -n istio-system
+   kubectl get events -A --field-selector reason=FailedCreatePodSandBox
+   ```
+
+   With access to the nodes, check each one directly: `grep istio-cni /etc/cni/net.d/*` prints nothing, and `/var/run/istio-cni/istio-cni-kubeconfig` does not exist.
+
+4. Remove what stays on the cluster. The Istio CRDs carry `helm.sh/resource-policy: keep`, so that a reinstall finds the Istio resources in place. If Istio is not coming back, delete them. This deletes every Istio resource in the cluster:
+
+   ```bash
+   kubectl get crd -o name | grep '\.istio\.io$' | xargs kubectl delete
+   ```
+
+   Then delete the `istio-system` namespace, or remove its `pod-security.kubernetes.io/enforce` label if the namespace stays. The Gateway API CRDs are not part of this distribution and stay in place.
+
 # See also
 
 * [Namespace Enrollment into Istio Ambient Mesh](namespace-enrollment.md)
+* [Troubleshooting](troubleshooting.md)
