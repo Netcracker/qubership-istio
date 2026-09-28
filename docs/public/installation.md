@@ -38,7 +38,7 @@ This distribution Helm chart has the following structure:
   - `ztunnel` - Istio ztunnel.
   - `istiod` - istiod (pilot) - Istio control plane.
 
-The distribution is installed and upgraded with Argo CD only. Argo CD renders the chart as published, while an installer that runs `helm dependency update` or `helm dependency build` first replaces the patched Istio subcharts with the vanilla ones.
+Install and upgrade the distribution with Argo CD only. The published chart carries the Istio subcharts with this distribution's changes built in: the image registry, the narrower `istiod` ClusterRole, and the node tuning. Argo CD renders the chart as published. A deployment tool that runs `helm dependency update` or `helm dependency build` before it installs downloads the vanilla Istio subcharts again, and these changes are lost.
 
 Qubership Istio should be installed under the service account with cluster-admin permissions in kubernetes.
 
