@@ -37,7 +37,7 @@ This distribution Helm chart has the following structure:
   - `ztunnel` - Istio ztunnel.
   - `istiod` - istiod (pilot) - Istio control plane.
 
-Installation should be performed with Helm version 3.6+ or Helm version 4.
+The distribution is installed and upgraded with Argo CD only. Argo CD renders the chart as published, while an installer that runs `helm dependency update` or `helm dependency build` first replaces the patched Istio subcharts with the vanilla ones.
 
 Qubership Istio should be installed under the service account with cluster-admin permissions in kubernetes.
 
@@ -166,7 +166,7 @@ The release reaches past its namespace: Istio's CRDs, the ClusterRoles and bindi
 This distribution narrows the upstream `istiod` ClusterRole. Write verbs on webhook configurations are restricted by `resourceNames` to istiod's own webhooks, while `list` and `watch` stay cluster-wide.
 
 ## Monitoring
-`MONITORING_ENABLED` defaults to `true`, and the release then carries a `ServiceMonitor`, two `PodMonitor`s, and two `GrafanaDashboard`s. Their CRDs have to be on the cluster first, otherwise `helm install` fails before a single Istio manifest is applied:
+`MONITORING_ENABLED` defaults to `true`, and the release then carries a `ServiceMonitor`, two `PodMonitor`s, and two `GrafanaDashboard`s. Their CRDs have to be on the cluster first, otherwise the sync fails:
 
 - `monitoring.coreos.com/v1`, from the Prometheus Operator
 - `integreatly.org/v1alpha1`, from grafana-operator v4. Version 5 serves `grafana.integreatly.org/v1beta1` and does not satisfy this
@@ -271,8 +271,8 @@ The values below are set by this chart; everything else keeps the vanilla defaul
 ## Before you begin
 Qubership Istio distro should always be installed into `istio-system` namespace. No other applications should be installed in this namespace. Only single instance of Qubership Istio must be installed on kubernetes cluster.
 
-### Helm
-Install via Helm into `istio-system` namespace.
+### Argo CD
+Install with an Argo CD Application into the `istio-system` namespace. See [OpenShift](#openshift) or [GKE](#gke) for the values those platforms need.
 
 ## On-prem
 ### HA scheme
@@ -315,7 +315,7 @@ A healthy release carries no traffic on its own. Workloads reach the mesh only a
 Install and upgrade procedures are identical.
 
 # Rollback
-Install via Helm with the previous version.
+Sync the Argo CD Application to the previous chart version.
 
 # See also
 
