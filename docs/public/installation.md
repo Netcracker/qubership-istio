@@ -4,6 +4,10 @@
   - [Kubernetes](#kubernetes)
     - [Gateway API](#gateway-api)
     - [Pod Security Admission](#pod-security-admission)
+  - [OpenShift](#openshift)
+    - [Gateway API](#gateway-api-1)
+    - [Pod Security Admission](#pod-security-admission-1)
+    - [Network](#network)
   - [GKE](#gke)
   - [RBAC](#rbac)
   - [Monitoring](#monitoring)
@@ -27,7 +31,7 @@ This is Qubership Istio Ambient Mesh Distribution. It includes vanilla Istio Amb
 
 This distribution Helm chart has the following structure:
 
-- `qubership-istio` - the chart you install. On top of the Istio charts below it adds monitoring resources, the Pod Security Admission hook, the node inotify tuning, a narrower `istiod` ClusterRole, and the values listed in [What the distribution presets](#what-the-distribution-presets).
+- `qubership-istio` - the chart you install. On top of the Istio charts below it adds monitoring resources, the Pod Security Admission hook, the node inotify tuning, the platform defaults for GKE and OpenShift, a narrower `istiod` ClusterRole, and the values listed in [What the distribution presets](#what-the-distribution-presets).
   - `base` - resources shared by all Istio revisions. This includes Istio CRDs.
   - `cni` - Istio CNI Plugin.
   - `ztunnel` - Istio ztunnel.
@@ -88,6 +92,53 @@ the version:
 global:
   kubectl:
     registry: <registry>
+```
+
+## OpenShift
+Supported versions: 4.19 to 4.22, the OpenShift releases built on the [supported Kubernetes versions](#kubernetes), from 1.32 in 4.19 to 1.35 in 4.22.
+
+Set this value:
+
+```yaml
+global:
+  platform: openshift
+```
+
+This value does three things:
+
+- The Istio [OpenShift profile](https://github.com/istio/istio/blob/1.30.4/manifests/helm-profiles/platform-openshift.yaml) puts the CNI plugin on the Multus paths, gives the agents the `spc_t` SELinux type, and makes the `cni` and `ztunnel` charts grant their service accounts the `privileged` SecurityContextConstraints.
+- istiod trusts ztunnel in `istio-system`. The profile points it at `kube-system`, where Istio installs ztunnel on OpenShift, and istiod issues no certificates to a ztunnel outside the trusted namespace. This distribution installs ztunnel in `istio-system`, so it sets `istiod.trustedZtunnelNamespace` to the release namespace itself. A value you set explicitly still takes precedence.
+- The Pod Security Admission hook is skipped, see [Pod Security Admission](#pod-security-admission-1).
+
+### Gateway API
+OpenShift installs and manages the Gateway API CRDs itself, from the `standard` channel, and rejects changes to them. Do not install them as described in [Gateway API](#gateway-api).
+
+Do not create the `openshift-default` GatewayClass on a cluster with this distribution: OpenShift then brings its own Istio CRDs, and two Istio installations share them.
+
+### Pod Security Admission
+OpenShift admits the agents by SecurityContextConstraints, not by the namespace label, and the `cni` and `ztunnel` charts already grant them `privileged`. The hook Job that `ENABLE_PRIVILEGED_PSS` adds runs as UID `1001`, which is outside the UID range OpenShift assigns to the namespace, so it would never be admitted. That is why the chart skips the hook on `openshift`, whatever `ENABLE_PRIVILEGED_PSS` says.
+
+### Network
+This step applies only when the cluster network is OVN-Kubernetes, the OpenShift default. Check the network type:
+
+```bash
+oc get network.config cluster -o jsonpath='{.status.networkType}'
+```
+
+With another network type, such as `Calico`, the setting below does not exist: skip this step.
+
+With `OVNKubernetes`, the network has to route egress through the host. With the default `routingViaHost: false`, the reply to a kubelet probe leaves the node without reaching kubelet, and every pod in ambient stays not ready. Check the value:
+
+```bash
+oc get networks.operator.openshift.io cluster \
+  -o jsonpath='{.spec.defaultNetwork.ovnKubernetesConfig.gatewayConfig}'
+```
+
+If it is not `true`, the cluster administrator switches it. The change applies to the egress of every pod in the cluster:
+
+```bash
+oc patch networks.operator.openshift.io cluster --type=merge \
+  -p '{"spec":{"defaultNetwork":{"ovnKubernetesConfig":{"gatewayConfig":{"routingViaHost":true}}}}}'
 ```
 
 ## GKE
@@ -160,21 +211,21 @@ Recommended for deployments with high workload and large amount of data.
 Every parameter on this page, the Istio ones included, is a top-level key of the values passed to this chart.
 
 ## General parameters
-| Parameter                                  | Type    | Mandatory | Default value                                                                  | Description                                                                                                                                                                                                                                           |
-|--------------------------------------------|---------|-----------|--------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| MONITORING_ENABLED                         | boolean | no        | true                                                                           | Flag to install custom resources (PodMonitor and grafana dashboard) for prometheus monitoring                                                                                                                                                         |
-| ENABLE_PRIVILEGED_PSS                      | boolean | no        | true                                                                           | Label the release namespace `pod-security.kubernetes.io/enforce=privileged` from a pre-install/pre-upgrade hook Job, for clusters where Pod Security Admission would otherwise reject the Ambient Mesh pods. Needs `get` and `patch` on the namespace |
-| global.kubectl.registry                    | string  | no        | `ghcr.io`                                                                      | Registry the kubectl image is pulled from, shared by the PSS patch Job and the node tuning init container. Redirect this alone for a private registry: the repository and the tag stay as shipped                                                     |
-| global.kubectl.repository                  | string  | no        | `netcracker/qubership-docker-kubectl`                                          | Repository of the kubectl image. Not an Istio image, so it is not derived from `global.hub`                                                                                                                                                           |
-| global.kubectl.tag                         | string  | no        | `0.0.9`                                                                        | Tag of that image. Used only when `global.kubectl.digest` is unset                                                                                                                                                                                    |
-| global.kubectl.digest                      | string  | no        | unset                                                                          | Digest of that image (`sha256:...`). When set, the image is pinned by digest and the tag is ignored                                                                                                                                                   |
-| global.kubectl.image                       | string  | no        | unset                                                                          | Whole reference, replacing registry, repository, tag and digest at once. For an image that does not follow the shipped naming                                                                                                                         |
-| patchPss.resources                         | object  | no        | 75m/75Mi requests, 150m/150Mi limits                                           | Resources for the PSS patch Job container                                                                                                                                                                                                             |
-| patchPss.podSecurityContext                | object  | no        | `runAsNonRoot: true`, `runAsUser: 1001`, `seccompProfile.type: RuntimeDefault` | Pod security context of the PSS patch Job. Must stay compliant with the policy currently enforced on the namespace, otherwise the Job cannot be admitted in order to relax it                                                                         |
-| patchPss.containerSecurityContext          | object  | no        | no privilege escalation, drop `ALL`, read-only root filesystem                 | Container security context of the PSS patch Job                                                                                                                                                                                                       |
-| global.nodeTuning.enabled                  | boolean | no        | `true`                                                                         | Run an init container in the `cni` and `ztunnel` DaemonSets that raises the node inotify limits before the agent starts. Set it to `false` where the platform already tunes these limits, through `/etc/sysctl.d` or a `Tuned` profile                |
-| global.nodeTuning.inotify.maxUserInstances | integer | no        | `8192`                                                                         | Target value for `fs.inotify.max_user_instances`. The kernel default of 128 is a per-UID budget shared with kubelet and containerd, and the agents fail to start with `Too many open files` once it runs out                                          |
-| global.nodeTuning.inotify.maxUserWatches   | integer | no        | `65536`                                                                        | Target value for `fs.inotify.max_user_watches`                                                                                                                                                                                                        |
+| Parameter                                  | Type    | Mandatory | Default value                                                                  | Description                                                                                                                                                                                                                                                                                                                                         |
+|--------------------------------------------|---------|-----------|--------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| MONITORING_ENABLED                         | boolean | no        | true                                                                           | Flag to install custom resources (PodMonitor and grafana dashboard) for prometheus monitoring                                                                                                                                                                                                                                                       |
+| ENABLE_PRIVILEGED_PSS                      | boolean | no        | true                                                                           | Label the release namespace `pod-security.kubernetes.io/enforce=privileged` from a pre-install/pre-upgrade hook Job, for clusters where Pod Security Admission would otherwise reject the Ambient Mesh pods. Needs `get` and `patch` on the namespace. Ignored with `global.platform: openshift`, where SecurityContextConstraints admit the agents |
+| global.kubectl.registry                    | string  | no        | `ghcr.io`                                                                      | Registry the kubectl image is pulled from, shared by the PSS patch Job and the node tuning init container. Redirect this alone for a private registry: the repository and the tag stay as shipped                                                                                                                                                   |
+| global.kubectl.repository                  | string  | no        | `netcracker/qubership-docker-kubectl`                                          | Repository of the kubectl image. Not an Istio image, so it is not derived from `global.hub`                                                                                                                                                                                                                                                         |
+| global.kubectl.tag                         | string  | no        | `0.0.9`                                                                        | Tag of that image. Used only when `global.kubectl.digest` is unset                                                                                                                                                                                                                                                                                  |
+| global.kubectl.digest                      | string  | no        | unset                                                                          | Digest of that image (`sha256:...`). When set, the image is pinned by digest and the tag is ignored                                                                                                                                                                                                                                                 |
+| global.kubectl.image                       | string  | no        | unset                                                                          | Whole reference, replacing registry, repository, tag and digest at once. For an image that does not follow the shipped naming                                                                                                                                                                                                                       |
+| patchPss.resources                         | object  | no        | 75m/75Mi requests, 150m/150Mi limits                                           | Resources for the PSS patch Job container                                                                                                                                                                                                                                                                                                           |
+| patchPss.podSecurityContext                | object  | no        | `runAsNonRoot: true`, `runAsUser: 1001`, `seccompProfile.type: RuntimeDefault` | Pod security context of the PSS patch Job. Must stay compliant with the policy currently enforced on the namespace, otherwise the Job cannot be admitted in order to relax it                                                                                                                                                                       |
+| patchPss.containerSecurityContext          | object  | no        | no privilege escalation, drop `ALL`, read-only root filesystem                 | Container security context of the PSS patch Job                                                                                                                                                                                                                                                                                                     |
+| global.nodeTuning.enabled                  | boolean | no        | `true`                                                                         | Run an init container in the `cni` and `ztunnel` DaemonSets that raises the node inotify limits before the agent starts. Set it to `false` where the platform already tunes these limits, through `/etc/sysctl.d` or a `Tuned` profile                                                                                                              |
+| global.nodeTuning.inotify.maxUserInstances | integer | no        | `8192`                                                                         | Target value for `fs.inotify.max_user_instances`. The kernel default of 128 is a per-UID budget shared with kubelet and containerd, and the agents fail to start with `Too many open files` once it runs out                                                                                                                                        |
+| global.nodeTuning.inotify.maxUserWatches   | integer | no        | `65536`                                                                        | Target value for `fs.inotify.max_user_watches`                                                                                                                                                                                                                                                                                                      |
 
 The init container writes to `/proc/sys/fs/inotify` through a `hostPath` mount, so it runs as root
 on the node. The `privileged` policy this distribution already requires on `istio-system` covers that.
