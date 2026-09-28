@@ -37,7 +37,7 @@ Installation should be performed with Helm version 3.6+ or Helm version 4.
 Qubership Istio should be installed under the service account with cluster-admin permissions in kubernetes.
 
 ## Kubernetes
-Supported k8s versions: 1.31, 1.32, 1.33, 1.34, 1.35.
+Supported k8s versions: 1.32, 1.33, 1.34, 1.35, 1.36, the versions [Istio 1.30 supports](https://istio.io/latest/docs/releases/supported-releases/).
 
 ### Gateway API
 The Kubernetes Gateway API CRDs are not part of this distribution. Install them on the cluster before the chart: without them no `Gateway` or `HTTPRoute` can exist, and a namespace labeled `istio.io/use-waypoint` gets no waypoint, because a waypoint is itself a `Gateway`.
