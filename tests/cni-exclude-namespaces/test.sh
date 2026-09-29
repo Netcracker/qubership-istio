@@ -19,6 +19,13 @@ OTHER_NS="cni-exclude-probe"
 PARK_LABEL="qubership-istio-test/cni-parked"
 RENDER_DIR="$(mktemp -d)"
 
+# Parks the agents with a nodeSelector that no node matches. An agent that stops
+# while its DaemonSet exists leaves the plugin behind unless the DaemonSet's node
+# affinity no longer matches the node: ShouldStopCleanup checks node affinity and
+# ignores nodeSelector, see
+# https://github.com/istio/istio/blob/1.30.4/cni/pkg/nodeagent/server.go#L155
+# Parking by node affinity would make the agents remove the plugin, and the
+# stale-plugin checks below would prove nothing.
 park_agents() {
   kubectl -n "${ISTIO_NAMESPACE}" patch daemonset istio-cni-node --type merge \
     -p "{\"spec\":{\"template\":{\"spec\":{\"nodeSelector\":{\"${PARK_LABEL}\":\"true\"}}}}}"
