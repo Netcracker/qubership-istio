@@ -68,6 +68,10 @@ jobs:
       - name: Run ct lint
         run: ct lint --all --chart-dirs ./helm-templates-extracted/qubership-istio
 
+      # Tests that only render templates need no cluster, so they run once here.
+      - name: Run template tests
+        run: bash tests/test-suite.sh ./helm-templates-extracted/qubership-istio platform-defaults
+
       # Ship the built chart (with vendored charts/) so the matrix legs install
       # the same artifact instead of each rebuilding the transfer image.
       - name: Upload extracted chart
