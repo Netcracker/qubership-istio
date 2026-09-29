@@ -3,7 +3,8 @@ set -euo pipefail
 
 # Verifies the values this distribution picks for a platform, from rendered manifests only:
 #   - openshift: istiod trusts ztunnel in the release namespace instead of the profile's
-#     kube-system, and the Pod Security Standards hook is skipped even when enabled;
+#     kube-system, and the Pod Security Standards hook is skipped even when enabled,
+#     whether the platform is set globally or on the subcharts;
 #   - gke: the CNI plugin goes to /home/kubernetes/bin without a -gke cluster version;
 #   - an explicit trusted ztunnel namespace still wins, and no platform keeps the old behavior.
 
@@ -47,6 +48,14 @@ expect "explicit trusted ztunnel namespace" "$(trusted_ztunnel openshift-explici
 
 render openshift-pss-on --set global.platform=openshift --set ENABLE_PRIVILEGED_PSS=true
 expect "openshift patch-pss resources with ENABLE_PRIVILEGED_PSS=true" "$(patch_pss_count openshift-pss-on)" "0"
+
+# The upstream charts also read the platform from their own values.
+render openshift-subcharts --set istiod.platform=openshift --set cni.platform=openshift --set ztunnel.platform=openshift
+expect "openshift trusted ztunnel set on the subcharts" "$(trusted_ztunnel openshift-subcharts)" "${ISTIO_NAMESPACE}/ztunnel"
+expect "openshift patch-pss resources set on the subcharts" "$(patch_pss_count openshift-subcharts)" "0"
+
+render openshift-cni-only --set cni.platform=openshift
+expect "openshift patch-pss resources set on cni only" "$(patch_pss_count openshift-cni-only)" "0"
 
 # --- 2. gke: CNI binary directory ---
 render gke --set global.platform=gke
