@@ -74,3 +74,5 @@ The agents read the list when they start, and changing the value does not restar
 ```bash
 kubectl rollout restart daemonset/istio-cni-node -n istio-system
 ```
+
+The list protects a node only if the agent that left the plugin there already had `istio-system` in its list. On a node left by an agent without it, the hook pod still fails, even when the new installation has the list. Install with the hook turned off, as described in [Installation hangs on the pre-install hook](../troubleshooting.md#installation-hangs-on-the-pre-install-hook), and the new agents repair the node.
