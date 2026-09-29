@@ -115,10 +115,12 @@ jobs:
           # patch-pss runs last: it temporarily stages enforce=restricted on
           # istio-system and leaves ENABLE_PRIVILEGED_PSS=true sticky on the
           # release, so nothing after it could be affected.
+          # cni-exclude-namespaces takes the CNI agents off the nodes for a while
+          # and puts them back on exit, so it runs late, right before patch-pss.
           - name: functional
             ip_family: ipv4
             kind_config: tests/kind-ipv4.yaml
-            tests: gateway num-trusted-proxies rollout istiod-rbac node-inotify patch-pss
+            tests: gateway num-trusted-proxies rollout istiod-rbac node-inotify cni-exclude-namespaces patch-pss
             require_dual_stack: "false"
     name: integration-test (${{ matrix.name }})
     steps:
