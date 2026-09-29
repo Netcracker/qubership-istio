@@ -41,7 +41,7 @@ Set Update strategy to `RevisionBased` for canary updates of Istio later.
 
 Set Update Workloads Automatically to `true`. It applies to `RevisionBased` only: with `InPlace` there is one control plane, and workloads are not moved.
 
-Provide the Helm value `trustedZtunnelNamespace: ztunnel`. ZTunnel is deployed to the `ztunnel` namespace in Step 6, while by default istiod trusts ztunnel only in its own namespace, `istio-system`. Without this value, pods in ambient get no certificates, and ztunnel logs `certificate fetch failed`.
+Provide the Helm value `trustedZtunnelNamespace: ztunnel`. ZTunnel is deployed to the `ztunnel` namespace in Step 6. By default, istiod on OpenShift trusts ztunnel only in `kube-system`: the `openshift` platform profile of the Istio charts sets it. Without this value, pods in ambient get no certificates, and ztunnel logs `certificate fetch failed`.
 
 ```yaml
 pilot:
