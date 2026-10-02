@@ -60,13 +60,12 @@ Ambient node agent shutting down - should stop cleanup? true
 
 Remove Istio as described in [Uninstall](../installation.md#uninstall).
 
-Keep `istio-system` in `cni.excludeNamespaces`. The plugin checks this list before it calls the API, so the hook pod starts on such a node, the installation reaches the DaemonSet, and the new agents repair the nodes. Keep `kube-system` in the list as well, because a list in the values replaces the default one:
+The chart adds its own namespace, `istio-system`, to `cni.excludeNamespaces`. The plugin checks this list before it calls the API, so the hook pod starts on such a node, the installation reaches the DaemonSet, and the new agents repair the nodes. A list you set in `cni.excludeNamespaces` replaces the default `kube-system`, so keep it there:
 
 ```yaml
 cni:
   excludeNamespaces:
     - kube-system
-    - istio-system
 ```
 
 The agents read the list when they start, and changing the value does not restart them. After a change, restart them once:
