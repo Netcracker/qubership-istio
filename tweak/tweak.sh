@@ -11,6 +11,7 @@ for chart in cni istiod ztunnel; do
 done
 
 # 2. Apply tweaks (one script per action folder).
+bash "${SCRIPT_DIR}/cni-exclude-release-namespace/apply.sh" "${CHARTS_DIR}"
 bash "${SCRIPT_DIR}/custom-registry/apply.sh" "${CHARTS_DIR}"
 bash "${SCRIPT_DIR}/istiod-rbac/apply.sh" "${CHARTS_DIR}"
 bash "${SCRIPT_DIR}/node-inotify/apply.sh" "${CHARTS_DIR}"

@@ -81,6 +81,17 @@ cni:
   seccompProfile:
     type: RuntimeDefault
 
+  # The CNI plugin lets pods of these namespaces through before it asks the
+  # Kubernetes API, and never enrolls them in the mesh. The chart always adds
+  # the release namespace to this list (tweak/cni-exclude-release-namespace):
+  # the pre-install hook pod then starts even on a node where a stopped agent
+  # left the plugin behind with a token that no longer works. Without it the
+  # hook never finishes, and the DaemonSet that would repair the node is never
+  # created. A list set here replaces this one, so keep kube-system in it. The
+  # agents write the list to the nodes when they start.
+  excludeNamespaces:
+    - kube-system
+
 # ---------------------------------------------------------------------------
 # istiod — control plane (Pilot / istiod)
 # ---------------------------------------------------------------------------
