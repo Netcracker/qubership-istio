@@ -17,11 +17,16 @@ This repository provides an umbrella Helm chart that installs the full Istio Amb
 
 **Prerequisites:** Kubernetes 1.31–1.35, Helm 3.6+, Gateway API CRDs pre-installed, `cluster-admin` privileges.
 
+Build the chart from the repository the way CI does, then install it:
+
 ```bash
 helm dependency build helm-templates/qubership-istio
+bash tweak/tweak.sh
 helm upgrade --install qubership-istio helm-templates/qubership-istio \
   --namespace istio-system --create-namespace
 ```
+
+`tweak/tweak.sh` builds this distribution's changes into the Istio subcharts that `helm dependency build` downloads. Without it the chart installs vanilla Istio. Do not run `helm dependency build` or `helm dependency update` again after it, see [Installation Notes](docs/public/installation.md).
 
 Install in `istio-system` only — one instance per cluster.
 

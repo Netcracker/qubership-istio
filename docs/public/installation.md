@@ -38,7 +38,7 @@ This distribution Helm chart has the following structure:
   - `ztunnel` - Istio ztunnel.
   - `istiod` - istiod (pilot) - Istio control plane.
 
-Install and upgrade the distribution with Argo CD only. The published chart carries the Istio subcharts with this distribution's changes built in: the image registry, the narrower `istiod` ClusterRole, and the node tuning. Argo CD renders the chart as published. A deployment tool that runs `helm dependency update` or `helm dependency build` before it installs downloads the vanilla Istio subcharts again, and these changes are lost.
+The published chart carries the Istio subcharts with this distribution's changes from `tweak/` built into them, such as the image registry and the narrower `istiod` ClusterRole. Install and upgrade it as it is. `helm dependency update` and `helm dependency build` download the vanilla Istio subcharts again and replace the ones in the chart, so these changes are lost. This also applies to a deployment tool that runs either command before it installs.
 
 Qubership Istio should be installed under the service account with cluster-admin permissions in kubernetes.
 
@@ -155,7 +155,7 @@ global:
 This value does two things:
 
 - The Istio [GKE profile](https://github.com/istio/istio/blob/1.30.4/manifests/helm-profiles/platform-gke.yaml) makes the `cni` and `ztunnel` charts render ResourceQuotas for the `system-node-critical` priority class, which both agents run with. GKE admits such pods only into a namespace with that quota. Without it the DaemonSets create no pods: `insufficient quota to match these scopes`.
-- The CNI plugin goes to `/home/kubernetes/bin`, where GKE looks for it. The upstream chart picks that directory only when the Kubernetes version it renders for contains `-gke`, and Argo CD passes the version without vendor suffixes, so this distribution sets it for `gke` itself. To use another directory, set `cni.cni.cniBinDir`: the `gke` profile overrides the shorter `cni.cniBinDir`.
+- The CNI plugin goes to `/home/kubernetes/bin`, where GKE looks for it. The upstream chart picks that directory only when the Kubernetes version it renders for contains `-gke`. A render that does not see the real cluster version misses the suffix, such as `helm template` or a deployment tool that drops vendor suffixes from the version, so this distribution sets the directory for `gke` itself. To use another directory, set `cni.cni.cniBinDir`: the `gke` profile overrides the shorter `cni.cniBinDir`.
 
 Gateway API and Pod Security Admission need nothing beyond [Kubernetes](#kubernetes).
 
@@ -273,8 +273,14 @@ The values below are set by this chart; everything else keeps the vanilla defaul
 ## Before you begin
 Qubership Istio distro should always be installed into `istio-system` namespace. No other applications should be installed in this namespace. Only single instance of Qubership Istio must be installed on kubernetes cluster.
 
-### Argo CD
-Install with an Argo CD Application into the `istio-system` namespace. See [OpenShift](#openshift) or [GKE](#gke) for the values those platforms need.
+### Install the release
+Install the chart into the `istio-system` namespace with any deployment tool, for example Helm:
+
+```bash
+helm upgrade --install qubership-istio <chart> --namespace istio-system --create-namespace -f values.yaml
+```
+
+`<chart>` is the published chart, or a chart built from the repository as in the [Quick Start](../../README.md#quick-start). See [OpenShift](#openshift) or [GKE](#gke) for the values those platforms need.
 
 ## On-prem
 ### HA scheme
@@ -317,7 +323,11 @@ A healthy release carries no traffic on its own. Workloads reach the mesh only a
 Install and upgrade procedures are identical.
 
 # Rollback
-Sync the Argo CD Application to the previous chart version.
+Install the previous chart version, for example:
+
+```bash
+helm rollback qubership-istio <revision> -n istio-system
+```
 
 # Uninstall
 Remove Istio in this order. Do not delete the `istio-system` namespace or force-delete its pods instead: the CNI agents then leave their plugin on the nodes, and new pods stop starting, see [Troubleshooting](troubleshooting.md#pods-do-not-start-with-istio-cni-unauthorized).
@@ -331,7 +341,7 @@ Remove Istio in this order. Do not delete the `istio-system` namespace or force-
    ```
 
    The pods leave the mesh within seconds, without a restart.
-3. Delete the Argo CD Application with cascade, the default.
+3. Uninstall the release with the tool that installed it, together with its resources, for example `helm uninstall qubership-istio -n istio-system`.
 4. Wait until `istio-system` has no pods left:
 
    ```bash
