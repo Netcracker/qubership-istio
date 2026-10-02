@@ -6,7 +6,8 @@ set -euo pipefail
 #     kube-system, and the Pod Security Standards hook is skipped even when enabled,
 #     whether the platform is set globally or on the subcharts;
 #     and the release notes say so;
-#   - gke: the CNI plugin goes to /home/kubernetes/bin without a -gke cluster version;
+#   - gke: the CNI plugin goes to /home/kubernetes/bin without a -gke cluster version,
+#     also when only the cni chart sets the platform;
 #   - an explicit trusted ztunnel namespace still wins, and no platform keeps the old behavior.
 
 RENDER_DIR="$(mktemp -d)"
@@ -71,6 +72,10 @@ notes | grep -q 'A pre-install/pre-upgrade hook labelled namespace' \
 # --- 2. gke: CNI binary directory ---
 render gke --set global.platform=gke
 expect "gke CNI binary directory" "$(cni_bin_dir gke)" "/home/kubernetes/bin"
+
+# The cni chart's own platform comes first, as in upstream.
+render gke-cni-only --set global.platform=openshift --set cni.platform=gke
+expect "gke CNI binary directory set on cni only" "$(cni_bin_dir gke-cni-only)" "/home/kubernetes/bin"
 
 # --- 3. No platform: the defaults stay as they were ---
 render none
