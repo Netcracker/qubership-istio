@@ -1,0 +1,8 @@
+{{- /*
+  On openshift, istiod trusts ztunnel in the release namespace unless trustedZtunnelNamespace is set.
+  The openshift profile points it at kube-system, while this chart installs ztunnel here.
+  This file renders before zzz_profile.yaml, so the value counts as user input and wins over the profile.
+*/ -}}
+{{- if and (eq ((coalesce .Values.platform (dig "platform" "" (.Values.global | default dict))) | default "") "openshift") (not (hasKey .Values "trustedZtunnelNamespace")) -}}
+{{- $_ := set .Values "trustedZtunnelNamespace" .Release.Namespace -}}
+{{- end -}}
