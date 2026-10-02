@@ -6,8 +6,12 @@
   vendor suffixes before it calls Helm, and a plain `helm template` uses its own default.
   The DaemonSet then falls back to /opt/cni/bin, which is read-only on Container-Optimized OS.
 
-  An explicit cniBinDir still wins.
+  A directory set as cni.cni.cniBinDir still wins. A directory set as cni.cniBinDir does not:
+  the gke profile blanks it before this template runs.
+
+  The platform is read the way upstream reads it: the chart's own platform first, then
+  global.platform.
 */ -}}
-{{- if and (eq ((coalesce .Values.global.platform .Values.platform) | default "") "gke") (not .Values.cniBinDir) -}}
+{{- if and (eq ((coalesce .Values.platform .Values.global.platform) | default "") "gke") (not .Values.cniBinDir) -}}
 {{- $_ := set .Values "cniBinDir" "/home/kubernetes/bin" -}}
 {{- end -}}
