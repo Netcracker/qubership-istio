@@ -51,12 +51,14 @@ For more information, see [CNI plugin left on a node](troubleshooting-scenarios/
 
 After Istio is removed, pods that were in the mesh stay ready but cannot resolve names or open connections. They still send their traffic to ztunnel, which is gone, because Istio was removed before they left the mesh. Such pods carry the annotation `ambient.istio.io/redirection: enabled`.
 
-As a solution, remove the mesh labels from their namespaces and restart the pods:
+As a solution, remove the mesh labels from their namespaces and restart the pods of every Deployment, StatefulSet, and DaemonSet there:
 
 ```bash
 kubectl label namespace <namespace> istio.io/dataplane-mode- istio.io/use-waypoint-
-kubectl rollout restart deployment -n <namespace>
+kubectl rollout restart deployment,statefulset,daemonset -n <namespace>
 ```
+
+Recreate the pods that no controller owns.
 
 ## Istio resources are rejected by the validating webhook
 
