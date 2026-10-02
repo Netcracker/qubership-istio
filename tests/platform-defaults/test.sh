@@ -5,6 +5,7 @@ set -euo pipefail
 #   - openshift: istiod trusts ztunnel in the release namespace instead of the profile's
 #     kube-system, and the Pod Security Standards hook is skipped even when enabled,
 #     whether the platform is set globally or on the subcharts;
+#     and the release notes say so;
 #   - gke: the CNI plugin goes to /home/kubernetes/bin without a -gke cluster version;
 #   - an explicit trusted ztunnel namespace still wins, and no platform keeps the old behavior.
 
@@ -33,6 +34,12 @@ patch_pss_count() {
   grep -c 'name: istio-patch-pss$' "${RENDER_DIR}/$1.yaml" || true
 }
 
+# The release notes, which helm template does not print. A client-side dry run needs no cluster.
+notes() {
+  helm install "${HELM_RELEASE}" "${HELM_CHART_PATH}" --namespace "${ISTIO_NAMESPACE}" --dry-run=client "$@" \
+    | sed -n '/^NOTES:/,$p'
+}
+
 expect() {
   local what="$1" got="$2" want="$3"
   [[ "${got}" == "${want}" ]] || fail "${what}: expected '${want}', got '${got}'"
@@ -56,6 +63,10 @@ expect "openshift patch-pss resources set on the subcharts" "$(patch_pss_count o
 
 render openshift-cni-only --set cni.platform=openshift
 expect "openshift patch-pss resources set on cni only" "$(patch_pss_count openshift-cni-only)" "0"
+notes --set cni.platform=openshift | grep -q 'On OpenShift the istio-cni and ztunnel pods are admitted' \
+  || fail "release notes with the platform set on cni only do not describe OpenShift"
+notes | grep -q 'A pre-install/pre-upgrade hook labelled namespace' \
+  || fail "release notes without a platform do not describe the hook"
 
 # --- 2. gke: CNI binary directory ---
 render gke --set global.platform=gke

@@ -37,7 +37,7 @@ Pod Security Standards:
   A pre-install/pre-upgrade hook labelled namespace {{ .Release.Namespace }} with
   pod-security.kubernetes.io/enforce=privileged. The label is left in place by
   `helm uninstall`; remove it manually if the namespace is reused.
-{{- else if eq (dig "platform" "" (.Values.global | default dict) | default "") "openshift" }}
+{{- else if include "qubership.platform.openshift" . }}
 
   On OpenShift the istio-cni and ztunnel pods are admitted by the privileged
   SecurityContextConstraints, which the chart grants to their service accounts.
