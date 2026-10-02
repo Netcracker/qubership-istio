@@ -23,6 +23,8 @@ OpenShift runs its own istiod for the Gateway API in `openshift-ingress` (Gatewa
 
 ## Steps
 
+The steps use two placeholders. Replace `<version>` with the Istio version the operator offers, written as `1.30.3`. Replace `<revision>` with the name of the IstioRevision resource the operator creates for it: `default-v` followed by the version with dots replaced by dashes, such as `default-v1-30-3`.
+
 ### Step 1: Create project with name istio-system
 
 Navigate to Home -> Projects and create a new project named `istio-system`.
@@ -33,7 +35,7 @@ Ecosystem -> Installed Operators -> Red Hat OpenShift Service Mesh 3 -> Istio - 
 
 Choose namespace `istio-system`.
 
-Choose Istio version `1.30.3`.
+Choose Istio version `<version>`.
 
 Choose profile `openshift-ambient`.
 
@@ -74,7 +76,7 @@ spec:
   values:
     pilot:
       trustedZtunnelNamespace: ztunnel
-  version: v1.30.3
+  version: v<version>
 ```
 
 The same resource with the `InPlace` update strategy and the optional `numTrustedProxies`:
@@ -97,7 +99,7 @@ spec:
       defaultConfig:
         gatewayTopology:
           numTrustedProxies: 1
-  version: v1.30.3
+  version: v<version>
 ```
 
 Once istiod is ready, check that its CA secret exists. If the secret is gone, the running istiod keeps its root CA only in memory, and its next restart issues a new one: ztunnel and gateways then fail with `BadSignature` for a few minutes.
@@ -130,7 +132,7 @@ metadata:
 spec:
   namespace: istio-cni
   profile: openshift-ambient
-  version: v1.30.3
+  version: v<version>
 ```
 
 ### Step 5: Create Project for ZTunnel
@@ -149,7 +151,7 @@ Choose namespace `ztunnel`.
 
 Check that Istio version is correct.
 
-If the Istio update strategy is `RevisionBased`, in `targetRef` choose kind `IstioRevision` and specify the name of the IstioRevision resource, for example `default-v1-30-3`. You can find it in Ecosystem -> Installed Operators -> Red Hat OpenShift Service Mesh 3 -> IstioRevisions.
+If the Istio update strategy is `RevisionBased`, in `targetRef` choose kind `IstioRevision` and specify the name of the IstioRevision resource, `<revision>`. You can find it in Ecosystem -> Installed Operators -> Red Hat OpenShift Service Mesh 3 -> IstioRevisions.
 
 ```yaml
 apiVersion: sailoperator.io/v1
@@ -160,12 +162,12 @@ spec:
   namespace: ztunnel
   targetRef:
     kind: IstioRevision
-    name: default-v1-30-3
+    name: <revision>
   values:
     ztunnel:
       logLevel: info
       terminationGracePeriodSeconds: 30
-  version: v1.30.3
+  version: v<version>
 ```
 
 ### Step 7: Create Project for Business Applications

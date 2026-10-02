@@ -71,6 +71,7 @@ A scratch Docker image (`qubership-istio-transfer`) is built and pushed to `ghcr
 
 - [Installation Notes](docs/public/installation.md) — prerequisites, HWE presets (Small/Medium/Large), full parameter reference
 - [Namespace Enrollment](docs/public/namespace-enrollment.md) — how to enroll namespaces into the ambient mesh
+- [Red Hat OpenShift Service Mesh 3 in ambient mode](docs/public/openshift-istio.md) — install the mesh from the Red Hat operator instead of this distribution
 - [Troubleshooting](docs/public/troubleshooting.md) — pods that do not start with `istio-cni` `Unauthorized`, a hanging pre-install hook, and other problems after Istio is removed the wrong way
 - [Hardware sizing model](docs/internal/hardware-sizing-model.md) — capacity planning formulas for ztunnel, istiod, waypoint, and CNI
 - [Contributing](CONTRIBUTING.md)

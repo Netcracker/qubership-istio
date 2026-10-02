@@ -98,6 +98,8 @@ global:
 ## OpenShift
 Supported versions: 4.19 to 4.22, the OpenShift releases built on the [supported Kubernetes versions](#kubernetes), from 1.32 in 4.19 to 1.35 in 4.22.
 
+To run the mesh on Red Hat OpenShift Service Mesh 3 instead of this distribution, see [Installing Red Hat OpenShift Service Mesh 3 in Ambient Mode](openshift-istio.md).
+
 Set this value:
 
 ```yaml
