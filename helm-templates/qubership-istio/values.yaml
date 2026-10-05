@@ -202,6 +202,10 @@ monitoring:
 #
 # The hook runs the kubectl image from global.kubectl, shared with the node
 # tuning init container.
+#
+# Ignored on the openshift platform, set in global or in any of istiod, cni,
+# and ztunnel: SecurityContextConstraints admit the agents there, and the hook
+# Job itself would not be admitted.
 ENABLE_PRIVILEGED_PSS: true
 
 patchPss:
