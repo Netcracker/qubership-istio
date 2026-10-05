@@ -12,6 +12,7 @@
   - [qubership-istio](#qubership-istio)
   - [Istio subcharts](#istio-subcharts)
     - [What the distribution presets](#what-the-distribution-presets)
+    - [Gateway cluster filtering](#gateway-cluster-filtering)
 - [Installation](#installation)
   - [Before you begin](#before-you-begin)
   - [On-prem](#on-prem)
@@ -195,9 +196,85 @@ The values below are set by this chart; everything else keeps the vanilla defaul
 | `istiod.meshConfig.defaultConfig.gatewayTopology.numTrustedProxies`                               |`1`| How many proxies sit in front of a gateway, which decides the client address a gateway reads from `X-Forwarded-For`. Set it to the real number of hops, otherwise the address is wrong           |
 | `istiod.gatewayClasses.istio.service.spec.type`                                                   |`ClusterIP`| Gateways created from the `istio` class get no cloud load balancer. Set `LoadBalancer` where one is wanted                                                                                       |
 | `istiod.env.ISTIO_DUAL_STACK` and `istiod.meshConfig.defaultConfig.proxyMetadata.ISTIO_DUAL_STACK` |`"false"`| Dual-stack support. Both have to be changed together: the mesh config carries the flag into gateway pods, and only a restarted istiod reconciles existing gateways with it                       |
+| `istiod.env.PILOT_FILTER_GATEWAY_CLUSTER_CONFIG`                                                  |`"false"`| `"true"` sends each gateway only the Envoy clusters of the Services it references, so gateway memory no longer grows with the number of Services in the cluster. An EnvoyFilter that names a cluster directly may need a change first, see [Gateway cluster filtering](#gateway-cluster-filtering) |
 | `ztunnel.meshConfig.defaultConfig.proxyMetadata`                                                  |`ISTIO_META_DNS_CAPTURE: "true"`, `ISTIO_META_ROUTER_MODE: "sni-dnat"`| Proxy metadata the chart sets for ztunnel                                                                                                                                                        |
 | `seccompProfile.type` on `global.proxy`, `cni`, `istiod`, and `istiod.gateways`                   |`RuntimeDefault`| Keeps the istiod and gateway pods admissible under `restricted`. No effect on the admission of `istio-cni-node` or `ztunnel`, which need `privileged` regardless |
 | `resources` on `cni`, `istiod`, `ztunnel`                                                         |see [HWE](#hwe)| Requests and limits for the three components                                                                                                                                                     |
+
+
+### Gateway cluster filtering
+By default istiod sends every gateway the Envoy cluster of every port of every Service in the cluster, whether its routes use it or not. Gateway memory then grows with the cluster: see [the hardware sizing model](../internal/hardware-sizing-model.md#5-gateway-sizing).
+
+With `istiod.env.PILOT_FILTER_GATEWAY_CLUSTER_CONFIG: "true"`, a gateway gets only the clusters of:
+
+- the backends of the routes attached to it,
+- the services of `meshConfig.extensionProviders`,
+- the JWKS hosts of the `RequestAuthentication` policies that apply to it,
+- the Services listed in the `envoyfilter.istio.io/referenced-services` annotation of the `EnvoyFilter`s that apply to it.
+
+Waypoints are not affected: they get only the Services bound to them either way. The flag applies to every gateway this istiod serves, and is experimental upstream.
+
+#### When an EnvoyFilter needs a change
+An `EnvoyFilter` that refers to an Envoy cluster by name, for example an HTTP filter that calls a service through `grpc_service.envoy_grpc.cluster_name`, works because istiod sends the gateway all clusters. No route of the gateway points at that Service, so with the flag on the cluster is no longer sent. Depending on the filter, Envoy either rejects the listener update, or accepts it and every call of the filter fails at request time; the filter's failure mode then decides whether requests pass without the filter or are rejected. The `EnvoyFilter` itself shows no error.
+
+If a route of one gateway already points at the same Service, that gateway still gets the cluster, and the problem shows only on the other gateways the `EnvoyFilter` targets.
+
+The fix is the annotation on the `EnvoyFilter`, listing the Service the cluster belongs to as `<namespace>/<hostname>`, several separated by commas:
+
+```yaml
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: request-check
+  namespace: istio-gateways
+  annotations:
+    # The Service behind cluster_name below: <namespace>/<hostname>
+    envoyfilter.istio.io/referenced-services: checker/request-checker.checker.svc.cluster.local
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: public-gateway
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: private-gateway
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+              subFilter:
+                name: envoy.filters.http.router
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.ext_proc
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+            grpc_service:
+              envoy_grpc:
+                # outbound|<port>||<hostname>: a cluster istiod builds for the Service
+                cluster_name: outbound|9000||request-checker.checker.svc.cluster.local
+```
+
+The annotation has to be on the `EnvoyFilter` that applies to the gateway, through `targetRefs` or `workloadSelector`, and name the same Service as `cluster_name`. istiod adds the Service to those gateways only. While the flag is off the annotation changes nothing, so add it before turning the flag on. Added later, it takes effect on the next push without a restart, but the filter fails until then.
+
+Services in `meshConfig.extensionProviders` need no annotation: istiod adds them by itself.
+
+To find the `EnvoyFilter`s that name a cluster:
+
+```bash
+kubectl get envoyfilter -A -o yaml | grep -n -E 'cluster_name|cluster: |outbound\|'
+```
+
+To check a gateway once the flag is on, the cluster has to be in its config:
+
+```bash
+istioctl proxy-config cluster deploy/<gateway>-istio -n <gateway namespace> | grep '<hostname>'
+```
 
 # Installation
 ## Before you begin

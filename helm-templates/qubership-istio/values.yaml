@@ -120,6 +120,14 @@ istiod:
   env:
     ISTIO_DUAL_STACK: "false"
 
+    # "true": a gateway gets Envoy clusters only for the Services it references
+    # (route backends, extensionProviders, JWKS hosts, the EnvoyFilter annotation
+    # envoyfilter.istio.io/referenced-services), not for every Service in the
+    # cluster. An EnvoyFilter that names a cluster directly needs that annotation:
+    # see "Gateway cluster filtering" in docs/public/installation.md.
+    # Experimental upstream; affects all gateways, not waypoints. Restarts istiod.
+    PILOT_FILTER_GATEWAY_CLUSTER_CONFIG: "false"
+
   meshConfig:
     accessLogFile: "/dev/stdout"
     defaultConfig:
