@@ -1,0 +1,18 @@
+{{- /*
+  Adds the release namespace to excludeNamespaces.
+
+  The CNI plugin lets pods of these namespaces through before it asks the Kubernetes API.
+  A node can keep the plugin after its agent stopped, with a token that no longer works.
+  The pre-install hook pod of this release starts on such a node only when the release
+  namespace is in the list, and the DaemonSet that would repair the node comes after the hook.
+
+  A list set in the values replaces the default one, so the namespace is added here rather
+  than in the values: it stays in the list whatever list the user sets.
+
+  The zzx prefix runs this template after zzz_profile.yaml, which merges the user's list,
+  and before configmap-cni.yaml, which reads it.
+*/ -}}
+{{- $excluded := .Values.excludeNamespaces | default list -}}
+{{- if not (has .Release.Namespace $excluded) -}}
+{{- $_ := set .Values "excludeNamespaces" (append $excluded .Release.Namespace) -}}
+{{- end -}}
