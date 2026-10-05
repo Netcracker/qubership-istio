@@ -1,0 +1,104 @@
+---
+# Measures the coefficients of docs/internal/hardware-sizing-model.md on a kind
+# cluster: M1, M3 and M4 of its measurement plan. Run by hand, not on every
+# change: a full run takes about an hour, and the coefficients only need it
+# after an Istio upgrade, a change of proxy CPU limits, or a change of the
+# model. The report lands in the run summary, and the CSV with the report in
+# the sizing-calibration artifact.
+
+name: Sizing Calibration
+
+on:
+  # TEMPORARY: lets the workflow run from this branch before it reaches main,
+  # where workflow_dispatch becomes available. Remove before merging.
+  push:
+    branches:
+      - fix/perfomance_issue
+    paths:
+      - 'tests/sizing/**'
+      - '.github/workflows/sizing-calibration.yml'
+  workflow_dispatch:
+    inputs:
+      experiments:
+        description: 'Measurements to run, separated by spaces: m1 m3 m4'
+        required: false
+        type: string
+        default: 'm1 m3 m4'
+
+permissions: {}
+
+jobs:
+  calibrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Install Helm 4
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.0.1
+
+      # The same chart the transfer image carries: subcharts vendored, tweaks applied.
+      - name: Assemble chart
+        run: |
+          helm dependency build helm-templates/qubership-istio
+          bash tweak/tweak.sh
+
+      - name: Install kind and kubectl
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          install_only: true
+
+      - name: Create kind cluster
+        run: kind create cluster --name sizing --config tests/kind-ipv4.yaml --wait 120s
+
+      - name: Install Gateway API CRDs
+        run: kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
+
+      - name: Helm install qubership-istio
+        run: |
+          helm upgrade --install qubership-istio ./helm-templates/qubership-istio \
+            --namespace istio-system \
+            --create-namespace \
+            --timeout 3m \
+            --wait \
+            --set MONITORING_ENABLED=false
+
+      - name: Measure
+        env:
+          EXPERIMENTS: ${{ inputs.experiments }}
+          HELM_CHART_PATH: ./helm-templates/qubership-istio
+          OUT_DIR: sizing-results
+        # Word splitting of EXPERIMENTS is intended; measure.sh rejects unknown names.
+        run: bash tests/sizing/measure.sh ${EXPERIMENTS}
+
+      - name: Report
+        if: always()
+        run: |
+          if [ -s sizing-results/measurements.csv ]; then
+            python3 tests/sizing/report.py sizing-results/measurements.csv > sizing-results/report.md
+            cat sizing-results/report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No measurements were recorded." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sizing-calibration-${{ github.run_id }}
+          path: sizing-results/
+          retention-days: 90
+
+      - name: Dump state on failure
+        if: failure()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl get gateway -A || true
+          kubectl logs -n istio-system deploy/istiod --tail=200 || true

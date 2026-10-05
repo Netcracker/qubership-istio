@@ -1,0 +1,40 @@
+# Each block renders its objects when it is set; nothing renders by default.
+# fixtures_render in tests/lib/utils.sh passes the values with --set-string, one call per use.
+
+# A Gateway (class istio) with an HTTP listener on port 80 that accepts routes
+# from every namespace, and the ConfigMap <name>-options with the resources of
+# its proxy.
+#   name, namespace (required)
+#   cpuLimit (default "1"), memoryLimit (default 1Gi)
+gateway: {}
+
+# A waypoint for the Services of its namespace, and its <name>-options.
+#   name, namespace (required)
+#   cpuLimit (default "2"), memoryLimit (default 1Gi)
+waypoint: {}
+
+# One path of a gateway to port 80 of a Service.
+#   name, namespace, gateway, gatewayNamespace, backend (required)
+#   pathPrefix (default /)
+httpRoute: {}
+
+# Services <prefix>-<from>..<prefix>-<to> without a selector, so without
+# endpoints, with ports 80, 81, ...: one Envoy cluster per port.
+#   namespace, prefix, from, to (required)
+#   ports (default 1)
+services: {}
+
+# HTTPRoutes from a gateway to <servicePrefix>-1..<servicePrefix>-<count> on
+# port 80, 16 rules per route (the Gateway API limit), labeled
+# tests/route=bulk.
+#   namespace, gateway, gatewayNamespace, servicePrefix, count (required)
+routes: {}
+
+# An EnvoyFilter on a gateway that inserts an ext_proc filter calling Envoy
+# cluster <cluster> by name: the case that needs the
+# envoyfilter.istio.io/referenced-services annotation once
+# PILOT_FILTER_GATEWAY_CLUSTER_CONFIG is on. All processing modes are SKIP and
+# failures are allowed, so the filter never touches traffic.
+#   name, namespace, gateway, cluster (required)
+#   referencedServices (optional): value of the annotation
+clusterRefFilter: {}

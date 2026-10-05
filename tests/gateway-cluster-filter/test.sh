@@ -21,7 +21,12 @@ set -eux
 # The flag restarts istiod, and the test leaves it as the chart default.
 # ---------------------------------------------------------------------------
 
+TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${TEST_DIR}/../lib/utils.sh"
+source "${TEST_DIR}/../lib/proxy.sh"
+
 GW_NAME=cluster-filter-gw
+GW_SELECTOR="gateway.networking.k8s.io/gateway-name=${GW_NAME}"
 NS=cluster-filter-test
 BULK_NS=cluster-filter-bulk
 BULK_COUNT=20
@@ -34,73 +39,65 @@ cluster_of() {
 }
 
 set_flag() {
-  helm upgrade "${HELM_RELEASE}" "${HELM_CHART_PATH}" \
-    --namespace "${ISTIO_NAMESPACE}" \
-    --timeout 3m \
-    --wait \
-    --reuse-values \
-    --set-string "istiod.env.${FLAG}=$1"
-  kubectl rollout status deployment/istiod -n "${ISTIO_NAMESPACE}" --timeout=120s
+  istiod_set_env "${FLAG}" "$1"
 }
 
 cleanup() {
   set_flag false || true
   kubectl delete envoyfilter "${EF_NAME}" -n "${ISTIO_NAMESPACE}" --ignore-not-found
   kubectl delete gateway "${GW_NAME}" -n "${ISTIO_NAMESPACE}" --ignore-not-found
+  kubectl delete configmap "${GW_NAME}-options" -n "${ISTIO_NAMESPACE}" --ignore-not-found
   kubectl delete namespace "${NS}" "${BULK_NS}" --ignore-not-found
 }
 trap cleanup EXIT
 
 gw_pod() {
-  kubectl get pod -n "${ISTIO_NAMESPACE}" -l "gateway.networking.k8s.io/gateway-name=${GW_NAME}" \
-    --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}'
+  proxy_pod "${ISTIO_NAMESPACE}" "${GW_SELECTOR}"
 }
 
+# The pod is looked up before use, so a missing pod fails here rather than as
+# an empty pod name further down.
 gw_admin() {
-  kubectl exec -n "${ISTIO_NAMESPACE}" "$(gw_pod)" -c istio-proxy -- pilot-agent request GET "$1"
+  local pod
+  pod=$(gw_pod) || return 1
+  proxy_admin "${ISTIO_NAMESPACE}" "${pod}" "$1"
 }
 
-# Lines of GET clusters start with "<cluster name>::".
-has_cluster() {
-  gw_admin clusters 2>/dev/null | grep -qF "$1::"
-}
-
-# wait_cluster present|absent <cluster>: istiod pushes asynchronously.
+# wait_cluster present|absent <cluster>
 wait_cluster() {
-  local want="$1" cluster="$2"
-  for i in $(seq 1 24); do
-    if has_cluster "${cluster}"; then
-      [ "${want}" = present ] && return 0
-    else
-      [ "${want}" = absent ] && return 0
-    fi
-    echo "Waiting for ${cluster} to be ${want} (attempt ${i}/24)..."
-    sleep 5
-  done
-  gw_admin clusters | grep -F 'outbound|' | cut -d: -f1 | sort -u || true
-  fail "cluster ${cluster}: expected ${want}"
+  local pod
+  pod=$(gw_pod)
+  proxy_wait_cluster "${ISTIO_NAMESPACE}" "${pod}" "$1" "$2"
 }
 
 expect_cluster() {
-  local want="$1" cluster="$2"
-  if has_cluster "${cluster}"; then
+  local want="$1" cluster="$2" pod
+  pod=$(gw_pod)
+  if proxy_has_cluster "${ISTIO_NAMESPACE}" "${pod}" "${cluster}"; then
     [ "${want}" = present ] || fail "cluster ${cluster}: expected absent, found present"
   else
     [ "${want}" = absent ] || fail "cluster ${cluster}: expected present, found absent"
   fi
-  echo "OK: ${cluster} ${want}"
+  ok "${cluster} ${want}"
 }
 
 active_clusters() {
-  gw_admin 'stats?filter=^cluster_manager.active_clusters$' | awk '{print $2}'
+  local pod
+  pod=$(gw_pod) || return 1
+  proxy_stat "${ISTIO_NAMESPACE}" "${pod}" cluster_manager.active_clusters
 }
 
 # The listener still carries the ext_proc filter, so Envoy accepted the
 # EnvoyFilter patch whether or not its cluster exists.
 expect_ext_proc_in_listener() {
-  gw_admin 'config_dump?resource=dynamic_listeners' | grep -q 'envoy.filters.http.ext_proc' \
-    || fail "ext_proc filter missing from the gateway listener"
-  echo "OK: ext_proc filter is in the gateway listener"
+  for _ in $(seq 1 12); do
+    if gw_admin 'config_dump?resource=dynamic_listeners' | grep -q 'envoy.filters.http.ext_proc'; then
+      ok "ext_proc filter is in the gateway listener"
+      return 0
+    fi
+    sleep 5
+  done
+  fail "ext_proc filter missing from the gateway listener"
 }
 
 curl_gw() {
@@ -118,34 +115,19 @@ curl_gw() {
 
 expect_traffic() {
   for i in $(seq 1 12); do
-    curl_gw /get && { echo "OK: traffic flows through the gateway"; return 0; }
-    echo "Attempt ${i}: waiting for traffic through the gateway..."
+    curl_gw /get && { ok "traffic flows through the gateway"; return 0; }
+    log "waiting for traffic through the gateway (${i}/12)"
     sleep 5
   done
   fail "HTTP traffic through the gateway failed"
 }
 
+# apply_route <name> <backend> <path prefix>
 apply_route() {
-  local name="$1" backend="$2" path="$3"
-  kubectl apply -f - <<YAML
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: ${name}
-  namespace: ${NS}
-spec:
-  parentRefs:
-  - name: ${GW_NAME}
-    namespace: ${ISTIO_NAMESPACE}
-  rules:
-  - matches:
-    - path:
-        type: PathPrefix
-        value: ${path}
-    backendRefs:
-    - name: ${backend}
-      port: 80
-YAML
+  fixtures_apply \
+    --set-string "httpRoute.name=$1,httpRoute.namespace=${NS}" \
+    --set-string "httpRoute.gateway=${GW_NAME},httpRoute.gatewayNamespace=${ISTIO_NAMESPACE}" \
+    --set-string "httpRoute.backend=$2,httpRoute.pathPrefix=$3"
 }
 
 # ---------------------------------------------------------------------------
@@ -156,7 +138,7 @@ DEFAULT=$(kubectl get deployment istiod -n "${ISTIO_NAMESPACE}" \
 if [ "${DEFAULT}" != "false" ]; then
   fail "${FLAG} on istiod: expected 'false', got '${DEFAULT}'"
 fi
-echo "OK: ${FLAG}=false by default"
+ok "${FLAG}=false by default"
 
 # ---------------------------------------------------------------------------
 # 1. Services, Gateway, route
@@ -169,28 +151,11 @@ kubectl create service clusterip unrouted --tcp=80:8080 -n "${NS}"
 kubectl create service clusterip referenced --tcp=80:8080 -n "${NS}"
 
 kubectl create namespace "${BULK_NS}"
-for i in $(seq 1 "${BULK_COUNT}"); do
-  kubectl create service clusterip "bulk-${i}" --tcp=80:8080 -n "${BULK_NS}"
-done
+fixtures_create --set-string "services.namespace=${BULK_NS},services.prefix=bulk,services.from=1,services.to=${BULK_COUNT}"
 
 kubectl rollout status deployment/routed -n "${NS}" --timeout=120s
 
-kubectl apply -f - <<YAML
-apiVersion: gateway.networking.k8s.io/v1
-kind: Gateway
-metadata:
-  name: ${GW_NAME}
-  namespace: ${ISTIO_NAMESPACE}
-spec:
-  gatewayClassName: istio
-  listeners:
-  - name: http
-    protocol: HTTP
-    port: 80
-    allowedRoutes:
-      namespaces:
-        from: All
-YAML
+fixtures_apply --set-string "gateway.name=${GW_NAME},gateway.namespace=${ISTIO_NAMESPACE}"
 kubectl wait gateway/"${GW_NAME}" -n "${ISTIO_NAMESPACE}" --for=condition=Programmed --timeout=120s
 kubectl rollout status "deployment/${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" --timeout=120s
 
@@ -199,45 +164,12 @@ expect_traffic
 
 # ---------------------------------------------------------------------------
 # 2. An EnvoyFilter that names the cluster of "referenced" and nothing else
-#    does: no route of the gateway points at that Service. All processing
-#    modes are SKIP and failures are allowed, so the filter never touches
-#    traffic.
+#    does: no route of the gateway points at that Service
 # ---------------------------------------------------------------------------
-kubectl apply -f - <<YAML
-apiVersion: networking.istio.io/v1alpha3
-kind: EnvoyFilter
-metadata:
-  name: ${EF_NAME}
-  namespace: ${ISTIO_NAMESPACE}
-spec:
-  targetRefs:
-  - group: gateway.networking.k8s.io
-    kind: Gateway
-    name: ${GW_NAME}
-  configPatches:
-  - applyTo: HTTP_FILTER
-    match:
-      context: GATEWAY
-      listener:
-        filterChain:
-          filter:
-            name: envoy.filters.network.http_connection_manager
-            subFilter:
-              name: envoy.filters.http.router
-    patch:
-      operation: INSERT_BEFORE
-      value:
-        name: envoy.filters.http.ext_proc
-        typed_config:
-          "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
-          failure_mode_allow: true
-          processing_mode:
-            request_header_mode: SKIP
-            response_header_mode: SKIP
-          grpc_service:
-            envoy_grpc:
-              cluster_name: $(cluster_of referenced)
-YAML
+fixtures_apply \
+  --set-string "clusterRefFilter.name=${EF_NAME},clusterRefFilter.namespace=${ISTIO_NAMESPACE}" \
+  --set-string "clusterRefFilter.gateway=${GW_NAME}" \
+  --set-string "clusterRefFilter.cluster=$(cluster_of referenced)"
 
 # ---------------------------------------------------------------------------
 # 3. Flag off: the gateway gets every Service
@@ -246,13 +178,9 @@ wait_cluster present "$(cluster_of "bulk-${BULK_COUNT}" "${BULK_NS}")"
 expect_cluster present "$(cluster_of routed)"
 expect_cluster present "$(cluster_of unrouted)"
 expect_cluster present "$(cluster_of referenced)"
-for _ in $(seq 1 12); do
-  gw_admin 'config_dump?resource=dynamic_listeners' | grep -q 'envoy.filters.http.ext_proc' && break
-  sleep 5
-done
 expect_ext_proc_in_listener
 ACTIVE_OFF=$(active_clusters)
-echo "active_clusters with the flag off: ${ACTIVE_OFF}"
+log "active_clusters with the flag off: ${ACTIVE_OFF}"
 
 # ---------------------------------------------------------------------------
 # 4. Flag on: only referenced Services; the EnvoyFilter loses its cluster
@@ -268,11 +196,10 @@ expect_ext_proc_in_listener
 expect_traffic
 
 ACTIVE_ON=$(active_clusters)
-echo "active_clusters with the flag on: ${ACTIVE_ON}"
 if [ $((ACTIVE_OFF - ACTIVE_ON)) -lt "${BULK_COUNT}" ]; then
   fail "active_clusters: expected a drop of at least ${BULK_COUNT}, got ${ACTIVE_OFF} -> ${ACTIVE_ON}"
 fi
-echo "OK: active_clusters dropped from ${ACTIVE_OFF} to ${ACTIVE_ON}"
+ok "active_clusters dropped from ${ACTIVE_OFF} to ${ACTIVE_ON}"
 
 # ---------------------------------------------------------------------------
 # 5. The annotation brings the cluster back
