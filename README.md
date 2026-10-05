@@ -15,7 +15,7 @@ This repository provides an umbrella Helm chart that installs the full Istio Amb
 
 ## Quick Start
 
-**Prerequisites:** Kubernetes 1.31–1.35, Helm 3.6+, Gateway API CRDs pre-installed, `cluster-admin` privileges.
+**Prerequisites:** a [supported Kubernetes version](docs/public/installation.md#kubernetes), Helm 3.6+, Gateway API CRDs pre-installed, `cluster-admin` privileges.
 
 Build the chart from the repository the way CI does, then install it:
 
