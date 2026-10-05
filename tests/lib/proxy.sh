@@ -32,7 +32,12 @@ proxy_pod() {
 
 # proxy_admin <namespace> <pod> <admin path>
 proxy_admin() {
-  kubectl exec -n "$1" "$2" -c istio-proxy -- pilot-agent request GET "$3"
+  local err rc=0
+  err=$(mktemp)
+  kubectl exec -n "$1" "$2" -c istio-proxy -- pilot-agent request GET "$3" 2>"${err}" || rc=$?
+  grep -v 'GOMEMLIMIT is already set' "${err}" >&2 || true
+  rm -f "${err}"
+  return "${rc}"
 }
 
 # proxy_stat <namespace> <pod> <stat name>: the value of one Envoy stat.
@@ -40,6 +45,41 @@ proxy_stat() {
   local out
   out=$(proxy_admin "$1" "$2" "stats?filter=^$3\$") || return 1
   awk '{print $2}' <<<"${out}"
+}
+
+# proxy_memory <namespace> <pod>: "<working set> <peak>" of the istio-proxy
+# container in MiB. The images are distroless, so nothing is read inside the
+# container. The working set comes from the kubelet summary API, the value
+# the kubelet evicts and reports by. The peak is memory.peak of the container
+# cgroup (cgroup v2, kernel 5.19+), read through the node container, so only
+# on kind; elsewhere it is empty. Either is empty when it cannot be read.
+proxy_memory() {
+  local ns="$1" pod="$2" node cid ws="" peak=""
+  node=$(kubectl get pod -n "${ns}" "${pod}" -o jsonpath='{.spec.nodeName}')
+  ws=$({ kubectl get --raw "/api/v1/nodes/${node}/proxy/stats/summary" 2>/dev/null || true; } |
+    python3 -c '
+import json, sys
+ns, pod = sys.argv[1], sys.argv[2]
+try:
+    data = json.load(sys.stdin)
+except ValueError:
+    sys.exit()
+for p in data.get("pods", []):
+    if p["podRef"]["namespace"] == ns and p["podRef"]["name"] == pod:
+        for c in p.get("containers", []):
+            if c["name"] == "istio-proxy" and "workingSetBytes" in c.get("memory", {}):
+                print("%.1f" % (c["memory"]["workingSetBytes"] / 1048576))
+' "${ns}" "${pod}")
+  cid=$(kubectl get pod -n "${ns}" "${pod}" \
+    -o jsonpath='{.status.containerStatuses[?(@.name=="istio-proxy")].containerID}')
+  cid="${cid#*://}"
+  if [ -n "${cid}" ] && command -v docker >/dev/null 2>&1 &&
+     docker inspect "${node}" >/dev/null 2>&1; then
+    peak=$(docker exec "${node}" sh -c \
+      "d=\$(find /sys/fs/cgroup -type d -name '*${cid}*' 2>/dev/null | head -1); [ -n \"\$d\" ] && cat \"\$d/memory.peak\"" \
+      2>/dev/null | awk 'NF { printf "%.1f", $1 / 1048576 }' || true)
+  fi
+  echo "${ws:--} ${peak:--}"
 }
 
 # proxy_has_cluster <namespace> <pod> <cluster>

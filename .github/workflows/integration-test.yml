@@ -194,7 +194,7 @@ jobs:
           echo "OK: cluster IP family matches '${{ matrix.ip_family }}'"
 
       - name: Install Gateway API CRDs
-        run: kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
+        run: kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.1/standard-install.yaml
 
       - name: Helm install qubership-istio
         run: |

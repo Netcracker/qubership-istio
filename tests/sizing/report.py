@@ -22,11 +22,17 @@ MODEL = {
 }
 DEVIATION = 0.10
 # Set high on purpose: a measured value below them leaves the model on the safe side.
-CONSERVATIVE = {"gateway_base_mi", "waypoint_base_mi", "clusters_per_service", "startup_margin"}
+# clusters_per_waypoint_port is measured on Services without endpoints, which may
+# give a waypoint fewer clusters than real ones.
+CONSERVATIVE = {"gateway_base_mi", "waypoint_base_mi", "clusters_per_service",
+                "clusters_per_waypoint_port", "startup_margin"}
 
 
 def fit(xs, ys):
-    """Least squares y = a + b*x; returns (a, b, r2) or None."""
+    """Least squares y = a + b*x over the pairs where both are known;
+    returns (a, b, r2) or None."""
+    pairs = [(x, y) for x, y in zip(xs, ys) if x is not None and y is not None]
+    xs, ys = [x for x, _ in pairs], [y for _, y in pairs]
     n = len(xs)
     if n < 2 or len(set(xs)) < 2:
         return None
@@ -53,11 +59,12 @@ def main(path):
         rows = list(csv.DictReader(f))
     for r in rows:
         for k in ("workers", "services", "ports_per_service", "bound_ports", "referenced",
-                  "active_clusters", "heap_mi", "working_set_mi", "peak_mi", "cds_kb", "lds_kb", "rds_kb"):
-            r[k] = num(r[k])
+                  "active_clusters", "heap_mi", "allocated_mi", "working_set_mi", "peak_mi",
+                  "cds_kb", "lds_kb", "rds_kb"):
+            r[k] = num(r.get(k))
     by_exp = defaultdict(list)
     for r in rows:
-        by_exp[r["experiment"]].append(r)
+        by_exp[r["measurement"]].append(r)
 
     out = []
     p = out.append
@@ -69,19 +76,26 @@ def main(path):
     notes = []
 
     # 1. gateway, flag off
-    gw = [r for r in by_exp["gateway"]]
+    gw = by_exp["gateway-services"]
     if gw:
         f_ws = fit([r["active_clusters"] for r in gw], [r["working_set_mi"] for r in gw])
         f_heap = fit([r["active_clusters"] for r in gw], [r["heap_mi"] for r in gw])
-        p("## 1. Gateway against Envoy clusters, flag off\n")
+        p("## 1. Envoy memory per cluster\n")
+        p("### Gateway against Envoy clusters, flag off\n")
         if f_ws:
             a, b, r2 = f_ws
             found["per_cluster_mi"] = b
             found["gateway_base_mi"] = a
             p(f"- Working set: **{a:.1f} Mi + {b:.4f} Mi per cluster** ({b * 1024:.0f} KiB), R² {r2:.3f}")
+        else:
+            p("- Working set: not measured")
         if f_heap:
             a, b, r2 = f_heap
-            p(f"- Envoy heap: {a:.1f} Mi + {b:.4f} Mi per cluster, R² {r2:.3f}")
+            p(f"- Envoy heap (tcmalloc physical): {a:.1f} Mi + {b:.4f} Mi per cluster, R² {r2:.3f}")
+        f_alloc = fit([r["active_clusters"] for r in gw], [r["allocated_mi"] for r in gw])
+        if f_alloc:
+            a, b, r2 = f_alloc
+            p(f"- Envoy heap in use: {a:.1f} Mi + {b:.4f} Mi per cluster, R² {r2:.3f}")
         per_port = {}
         for ports in sorted({r["ports_per_service"] for r in gw}):
             sub = [r for r in gw if r["ports_per_service"] == ports]
@@ -97,14 +111,15 @@ def main(path):
         p("")
 
     # 1. gateway, flag on
-    gwf = by_exp["gateway-flag"]
+    gwf = by_exp["gateway-referenced-services"]
     if gwf:
-        p("## 1. Gateway with PILOT_FILTER_GATEWAY_CLUSTER_CONFIG\n")
+        p("### Gateway with PILOT_FILTER_GATEWAY_CLUSTER_CONFIG\n")
         f_cl = fit([r["referenced"] for r in gwf], [r["active_clusters"] for r in gwf])
         f_ws = fit([r["active_clusters"] for r in gwf], [r["working_set_mi"] for r in gwf])
         for r in gwf:
+            ws = f"{r['working_set_mi']:.1f} Mi" if r["working_set_mi"] is not None else "working set not measured"
             p(f"- {r['services']:.0f} Services in the cluster, {r['referenced']:.0f} referenced: "
-              f"{r['active_clusters']:.0f} clusters, {r['working_set_mi']:.1f} Mi")
+              f"{r['active_clusters']:.0f} clusters, {ws}")
         if f_cl:
             p(f"- Clusters per referenced Service: {f_cl[1]:.2f}")
         if f_ws:
@@ -112,9 +127,9 @@ def main(path):
         p("")
 
     # 1. waypoint
-    wpp = by_exp["waypoint-ports"]
+    wpp = by_exp["waypoint-bound-ports"]
     if wpp:
-        p("## 1. Waypoint against its bound Service ports\n")
+        p("### Waypoint against its bound Service ports\n")
         f_cl = fit([r["bound_ports"] for r in wpp], [r["active_clusters"] for r in wpp])
         f_ws = fit([r["active_clusters"] for r in wpp], [r["working_set_mi"] for r in wpp])
         if f_cl:
@@ -126,10 +141,15 @@ def main(path):
         if f_ws:
             found["waypoint_base_mi"] = f_ws[0]
             p(f"- Working set: **{f_ws[0]:.1f} Mi + {f_ws[1]:.4f} Mi per cluster**, R² {f_ws[2]:.3f}")
+        else:
+            p("- Working set: not measured")
+        f_heap = fit([r["active_clusters"] for r in wpp], [r["heap_mi"] for r in wpp])
+        if f_heap:
+            p(f"- Envoy heap (tcmalloc physical): {f_heap[0]:.1f} Mi + {f_heap[1]:.4f} Mi per cluster, R² {f_heap[2]:.3f}")
         p("")
-    wpc = by_exp["waypoint-cluster"]
+    wpc = by_exp["waypoint-cluster-services"]
     if wpc:
-        p("## 1. Waypoint against the Services of the cluster\n")
+        p("### Waypoint against the Services of the cluster\n")
         f = fit([r["services"] for r in wpc], [r["working_set_mi"] for r in wpc])
         f_cl = fit([r["services"] for r in wpc], [r["active_clusters"] for r in wpc])
         if f:
@@ -141,32 +161,36 @@ def main(path):
         if f_cl:
             p(f"- Envoy clusters: {f_cl[1] * 1000:+.1f} per 1000 Services elsewhere")
         p("")
-        p("| Services in the cluster | Clusters | Working set, Mi | CDS, kB | LDS, kB | RDS, kB |")
-        p("|---|---|---|---|---|---|")
+        p("| Services in the cluster | Clusters | Working set, Mi | Heap, Mi | CDS, kB | LDS, kB | RDS, kB |")
+        p("|---|---|---|---|---|---|---|")
         for r in wpc:
             sizes = [f"{r[k]:g}" if r[k] is not None else "–" for k in ("cds_kb", "lds_kb", "rds_kb")]
-            p(f"| {r['services']:g} | {r['active_clusters']:g} | {r['working_set_mi']:g} | " + " | ".join(sizes) + " |")
+            ws = f"{r['working_set_mi']:g}" if r["working_set_mi"] is not None else "–"
+            heap = f"{r['heap_mi']:g}" if r["heap_mi"] is not None else "–"
+            p(f"| {r['services']:g} | {r['active_clusters']:g} | {ws} | {heap} | " + " | ".join(sizes) + " |")
         p("")
 
     # 2. Envoy workers
-    workers = by_exp["workers"]
+    workers = by_exp["gateway-workers"]
     if workers:
-        p("## 2. Envoy workers\n")
-        p("| CPU limit | Workers | Base, Mi | Per cluster, Mi | Per cluster, KiB |")
-        p("|---|---|---|---|---|")
+        p("## 2. Gateway against Envoy workers\n")
+        p("| CPU limit | Workers | Working set: base, Mi | per cluster, KiB | Heap: base, Mi | per cluster, KiB |")
+        p("|---|---|---|---|---|---|")
         by_workers = defaultdict(list)
         for r in workers:
             by_workers[(r["cpu_limit"], r["workers"])].append(r)
         for (cpu, workers), sub in sorted(by_workers.items(), key=lambda kv: kv[0][1] or 0):
-            f = fit([r["active_clusters"] for r in sub], [r["working_set_mi"] for r in sub])
-            if f:
-                p(f"| {cpu} | {workers:.0f} | {f[0]:.1f} | {f[1]:.4f} | {f[1] * 1024:.0f} |")
+            cells = []
+            for col in ("working_set_mi", "heap_mi"):
+                f = fit([r["active_clusters"] for r in sub], [r[col] for r in sub])
+                cells += [f"{f[0]:.1f}", f"{f[1] * 1024:.0f}"] if f else ["–", "–"]
+            p(f"| {cpu} | {workers:.0f} | " + " | ".join(cells) + " |")
         p("")
 
     # 3. Startup peak
-    startup = by_exp["startup"]
+    startup = by_exp["gateway-startup"]
     if startup:
-        p("## 3. Startup peak\n")
+        p("## 3. Gateway startup peak\n")
         ratios = []
         for r in startup:
             if r["peak_mi"] and r["working_set_mi"]:
@@ -197,7 +221,7 @@ def main(path):
     p("")
     p(f"Deviations above {DEVIATION:.0%} are marked. Bases, clusters per Service and the margin are set high "
       "on purpose, so a lower measured value leaves the model on the safe side. `clusters_per_service` is not measured here: "
-      "synthetic Services have no subsets, so p1 gives clusters per port only.\n")
+      "synthetic Services have no subsets, so the measurements give clusters per port only.\n")
     if notes:
         p("## Notes\n")
         for n in notes:
@@ -205,15 +229,15 @@ def main(path):
         p("")
 
     p("## All measurements\n")
-    cols = ["experiment", "proxy", "cpu_limit", "workers", "services", "ports_per_service",
-            "bound_ports", "referenced", "flag", "active_clusters", "heap_mi", "working_set_mi", "peak_mi",
-            "cds_kb", "lds_kb", "rds_kb"]
+    cols = ["measurement", "proxy", "cpu_limit", "workers", "services", "ports_per_service",
+            "bound_ports", "referenced", "flag", "active_clusters", "heap_mi", "allocated_mi",
+            "working_set_mi", "peak_mi", "cds_kb", "lds_kb", "rds_kb"]
     p("| " + " | ".join(cols) + " |")
     p("|" + "---|" * len(cols))
     for r in rows:
         cells = []
         for c in cols:
-            v = r[c]
+            v = r.get(c)
             cells.append(f"{v:g}" if isinstance(v, float) else ("–" if v is None else str(v)))
         p("| " + " | ".join(cells) + " |")
 

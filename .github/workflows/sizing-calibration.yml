@@ -1,7 +1,7 @@
 ---
 # Measures the coefficients of docs/internal/hardware-sizing-model.md on a kind
-# cluster: M1, M3 and M4 of its measurement plan. Run by hand, not on every
-# change: a full run takes about an hour, and the coefficients only need it
+# cluster: the part of its measurement plan that runs in CI. Run by hand, not
+# on every change: a full run takes about half an hour, and the coefficients only need it
 # after an Istio upgrade, a change of proxy CPU limits, or a change of the
 # model. The report lands in the run summary, and the CSV with the report in
 # the sizing-calibration artifact.
@@ -19,11 +19,11 @@ on:
       - '.github/workflows/sizing-calibration.yml'
   workflow_dispatch:
     inputs:
-      experiments:
-        description: 'Measurements to run, separated by spaces: m1 m3 m4'
+      measurements:
+        description: 'Measurements to run, separated by spaces: clusters workers startup'
         required: false
         type: string
-        default: 'm1 m3 m4'
+        default: 'clusters workers startup'
 
 permissions: {}
 
@@ -59,7 +59,7 @@ jobs:
         run: kind create cluster --name sizing --config tests/kind-ipv4.yaml --wait 120s
 
       - name: Install Gateway API CRDs
-        run: kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
+        run: kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.1/standard-install.yaml
 
       - name: Helm install qubership-istio
         run: |
@@ -72,11 +72,11 @@ jobs:
 
       - name: Measure
         env:
-          EXPERIMENTS: ${{ inputs.experiments }}
+          MEASUREMENTS: ${{ inputs.measurements }}
           HELM_CHART_PATH: ./helm-templates/qubership-istio
           OUT_DIR: sizing-results
-        # Word splitting of EXPERIMENTS is intended; measure.sh rejects unknown names.
-        run: bash tests/sizing/measure.sh ${EXPERIMENTS}
+        # Word splitting of MEASUREMENTS is intended; measure.sh rejects unknown names.
+        run: bash tests/sizing/measure.sh ${MEASUREMENTS}
 
       - name: Report
         if: always()
