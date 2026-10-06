@@ -1,10 +1,9 @@
----
 # Measures the coefficients of docs/internal/hardware-sizing-model.md on a kind
-# cluster: the part of its measurement plan that runs in CI. Run by hand, not
-# on every change: a full run takes about half an hour, and the coefficients only need it
-# after an Istio upgrade, a change of proxy CPU limits, or a change of the
-# model. The report lands in the run summary, and the CSV with the report in
-# the sizing-calibration artifact.
+# cluster: the measurements of docs/internal/hardware-sizing-calibration.md.
+# Run by hand, not on every change: a full run takes about three hours, and
+# the coefficients only need it after an Istio upgrade, a change of proxy CPU
+# limits, or a change of the model. The report lands in the run summary, and
+# the CSV with the report in the sizing-calibration artifact.
 
 name: Sizing Calibration
 
@@ -16,23 +15,30 @@ on:
       - fix/perfomance_issue
     paths:
       - 'tests/sizing/**'
+      - 'tests/lib/**'
       - '.github/workflows/sizing-calibration.yml'
   workflow_dispatch:
     inputs:
       measurements:
-        description: 'Measurements to run, separated by spaces: clusters workers startup'
+        description: 'Measurements to run, separated by spaces: clusters workers startup endpoints traffic ztunnel istiod'
         required: false
         type: string
-        default: 'clusters workers startup'
+        default: 'clusters workers startup endpoints traffic ztunnel istiod'
 
 permissions: {}
 
 jobs:
   calibrate:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 300
     permissions:
       contents: read
+    env:
+      # Empty on a push: measure.sh then runs all of them.
+      MEASUREMENTS: ${{ inputs.measurements }}
+      KWOK_VERSION: v0.8.0
+      # github.com/howardjohn/pilot-load has no releases; pinned to a commit.
+      PILOT_LOAD_COMMIT: d1df4d1604b4a087d6f8ccc4290a80a8426a4680
     steps:
       - name: Checkout code
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -56,11 +62,44 @@ jobs:
           install_only: true
 
       - name: Create kind cluster
-        run: kind create cluster --name sizing --config tests/kind-ipv4.yaml --wait 120s
+        run: kind create cluster --name sizing --config tests/sizing/kind.yaml --wait 180s
+
+      # Fake nodes and pods for measurements 4, 6 and 7. KWOK gives every fake
+      # node the IP of its own pod by default; kindnet then routes the pod CIDR
+      # of each fake node through that IP, which the kernel rejects, and
+      # kindnet restarts until it gives up. The gateway of the kind network is
+      # a next hop every node can route through, and no node owns it.
+      - name: Install KWOK
+        run: |
+          kubectl apply -f "https://github.com/kubernetes-sigs/kwok/releases/download/${KWOK_VERSION}/kwok.yaml"
+          kubectl apply -f "https://github.com/kubernetes-sigs/kwok/releases/download/${KWOK_VERSION}/stage-fast.yaml"
+          gw=$(docker network inspect kind -f '{{range .IPAM.Config}}{{.Gateway}}{{"\n"}}{{end}}' | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -1 || true)
+          [ -n "${gw}" ] || { echo "no IPv4 gateway on the kind network"; exit 1; }
+          kubectl patch deployment kwok-controller -n kube-system --type=json \
+            -p "[{\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/args/1\",\"value\":\"--node-ip=${gw}\"}]"
+          kubectl rollout status deployment/kwok-controller -n kube-system --timeout=180s
+
+      # Simulated ztunnels and waypoints for measurement 7.
+      - name: Install Go
+        if: env.MEASUREMENTS == '' || contains(env.MEASUREMENTS, 'istiod')
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: '1.25'
+          cache: false
+
+      - name: Build pilot-load
+        if: env.MEASUREMENTS == '' || contains(env.MEASUREMENTS, 'istiod')
+        run: |
+          go install "github.com/howardjohn/pilot-load@${PILOT_LOAD_COMMIT}"
+          echo "PILOT_LOAD=$(go env GOPATH)/bin/pilot-load" >> "$GITHUB_ENV"
 
       - name: Install Gateway API CRDs
         run: kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.1/standard-install.yaml
 
+      # istiod and ztunnel get limits well above the chart's, so that neither is
+      # OOMKilled or throttled at the cluster sizes the run creates; istiod
+      # sets GOMAXPROCS from its CPU limit. Access logs are off: under load a
+      # line per request would add to the memory and CPU being measured.
       - name: Helm install qubership-istio
         run: |
           helm upgrade --install qubership-istio ./helm-templates/qubership-istio \
@@ -68,11 +107,15 @@ jobs:
             --create-namespace \
             --timeout 3m \
             --wait \
-            --set MONITORING_ENABLED=false
+            --set MONITORING_ENABLED=false \
+            --set istiod.resources.limits.cpu=2 \
+            --set istiod.resources.limits.memory=4Gi \
+            --set ztunnel.resources.limits.cpu=1 \
+            --set ztunnel.resources.limits.memory=2Gi \
+            --set-string istiod.meshConfig.accessLogFile=
 
       - name: Measure
         env:
-          MEASUREMENTS: ${{ inputs.measurements }}
           HELM_CHART_PATH: ./helm-templates/qubership-istio
           OUT_DIR: sizing-results
         # Word splitting of MEASUREMENTS is intended; measure.sh rejects unknown names.
@@ -82,7 +125,7 @@ jobs:
         if: always()
         run: |
           if [ -s sizing-results/measurements.csv ]; then
-            python3 tests/sizing/report.py sizing-results/measurements.csv > sizing-results/report.md
+            python3 -B tests/sizing/report.py sizing-results/measurements.csv > sizing-results/report.md
             cat sizing-results/report.md >> "$GITHUB_STEP_SUMMARY"
           else
             echo "No measurements were recorded." >> "$GITHUB_STEP_SUMMARY"
@@ -99,6 +142,9 @@ jobs:
       - name: Dump state on failure
         if: failure()
         run: |
-          kubectl get pods -A -o wide || true
+          kubectl get nodes -o wide || true
+          kubectl get pods -A -o wide --field-selector=status.phase!=Running || true
+          kubectl get pods -A -o wide -l '!tests/apps' || true
           kubectl get gateway -A || true
           kubectl logs -n istio-system deploy/istiod --tail=200 || true
+          kubectl logs -n kube-system deploy/kwok-controller --tail=50 || true

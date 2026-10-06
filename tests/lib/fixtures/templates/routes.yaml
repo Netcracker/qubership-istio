@@ -4,7 +4,8 @@
 {{- $gatewayNamespace := required "routes.gatewayNamespace is required" .gatewayNamespace }}
 {{- $prefix := required "routes.servicePrefix is required" .servicePrefix }}
 {{- $count := int (required "routes.count is required" .count) }}
-{{- range $r := until (int (div (add $count 15) 16)) }}
+{{- $rules := int (.rulesPerRoute | default 16) }}
+{{- range $r := until (int (div (add $count (sub $rules 1)) $rules)) }}
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -18,8 +19,8 @@ spec:
   - name: {{ $gateway }}
     namespace: {{ $gatewayNamespace }}
   rules:
-  {{- range $k := until 16 }}
-  {{- $i := add (mul $r 16) $k 1 }}
+  {{- range $k := until $rules }}
+  {{- $i := add (mul $r $rules) $k 1 }}
   {{- if le (int $i) $count }}
   - matches:
     - path:

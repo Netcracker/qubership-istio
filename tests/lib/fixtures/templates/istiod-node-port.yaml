@@ -1,0 +1,16 @@
+{{- with .Values.istiodNodePort }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: istiod-sizing
+  namespace: {{ required "istiodNodePort.namespace is required" .namespace }}
+spec:
+  type: NodePort
+  selector:
+    app: istiod
+  ports:
+  - name: grpc-xds-tls
+    port: 15012
+    targetPort: 15012
+    nodePort: {{ required "istiodNodePort.nodePort is required" .nodePort }}
+{{- end }}

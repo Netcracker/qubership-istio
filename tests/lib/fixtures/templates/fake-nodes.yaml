@@ -1,0 +1,42 @@
+{{- with .Values.fakeNodes }}
+{{- $prefix := .prefix | default "kwok-node" }}
+{{- $from := int (required "fakeNodes.from is required" .from) }}
+{{- $to := int (required "fakeNodes.to is required" .to) }}
+{{- $pods := .pods | default "200" }}
+{{- range $i := untilStep $from (int (add $to 1)) 1 }}
+---
+apiVersion: v1
+kind: Node
+metadata:
+  name: {{ $prefix }}-{{ $i }}
+  annotations:
+    node.alpha.kubernetes.io/ttl: "0"
+    kwok.x-k8s.io/node: fake
+  labels:
+    kubernetes.io/arch: amd64
+    kubernetes.io/hostname: {{ $prefix }}-{{ $i }}
+    kubernetes.io/os: linux
+    kubernetes.io/role: agent
+    type: kwok
+spec:
+  taints:
+  - effect: NoSchedule
+    key: kwok.x-k8s.io/node
+    value: fake
+status:
+  allocatable:
+    cpu: "32"
+    memory: 256Gi
+    pods: {{ $pods | quote }}
+  capacity:
+    cpu: "32"
+    memory: 256Gi
+    pods: {{ $pods | quote }}
+  nodeInfo:
+    architecture: amd64
+    kubeProxyVersion: fake
+    kubeletVersion: fake
+    operatingSystem: linux
+  phase: Running
+{{- end }}
+{{- end }}

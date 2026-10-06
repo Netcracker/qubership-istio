@@ -19,15 +19,16 @@ waypoint: {}
 httpRoute: {}
 
 # Services <prefix>-<from>..<prefix>-<to> without a selector, so without
-# endpoints, with ports 80, 81, ...: one Envoy cluster per port.
+# endpoints, with ports 80, 81, ...: one Envoy cluster per port. Labeled
+# tests/services=<prefix>.
 #   namespace, prefix, from, to (required)
 #   ports (default 1)
 services: {}
 
 # HTTPRoutes from a gateway to <servicePrefix>-1..<servicePrefix>-<count> on
-# port 80, 16 rules per route (the Gateway API limit), labeled
-# tests/route=bulk.
+# port 80, labeled tests/route=bulk.
 #   namespace, gateway, gatewayNamespace, servicePrefix, count (required)
+#   rulesPerRoute (default 16, the Gateway API limit)
 routes: {}
 
 # An EnvoyFilter on a gateway that inserts an ext_proc filter calling Envoy
@@ -38,3 +39,36 @@ routes: {}
 #   name, namespace, gateway, cluster (required)
 #   referencedServices (optional): value of the annotation
 clusterRefFilter: {}
+
+# Nodes <prefix>-<from>..<prefix>-<to> that KWOK keeps Ready, labeled
+# type=kwok and tainted kwok.x-k8s.io/node=fake:NoSchedule so that only pods
+# tolerating the taint land there. Needs KWOK in the cluster.
+#   from, to (required)
+#   prefix (default kwok-node), pods: pods per node (default 200)
+fakeNodes: {}
+
+# Services <prefix>-<from>..<prefix>-<to>, each selecting a Deployment of the
+# same name whose pods run on the KWOK nodes: no containers, but a pod IP, so
+# the Service has endpoints and istiod a workload per pod. Labeled
+# tests/apps=<prefix>.
+#   namespace, prefix, from, to (required)
+#   replicas (default 1)
+#   ambient (default false): annotate the pods the way istio-cni does when it
+#   captures a pod, so istiod sends them as HBONE workloads
+fakeApps: {}
+
+# A fortio echo server and two fortio clients in one namespace: Deployment and
+# Service echo, the Service echo-direct (istio.io/use-waypoint: none) for the
+# same pods, Deployment client outside the mesh (istio.io/dataplane-mode:
+# none) and Deployment client-mesh, which follows its namespace. The clients
+# run a fortio server too, to stay up; load runs through kubectl exec.
+#   namespace (required)
+#   image (default fortio/fortio:1.75.3)
+#   serverNode, clientNode (optional): kubernetes.io/hostname to pin the
+#   server and the clients to
+fortio: {}
+
+# A NodePort Service istiod-sizing for the xDS port 15012 of istiod, for
+# simulated proxies running outside the cluster.
+#   namespace, nodePort (required)
+istiodNodePort: {}

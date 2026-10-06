@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# Reading an Istio proxy (gateway or waypoint), and changing an istiod
-# environment variable through the chart. Sourced — not executed.
+# Reading an Istio proxy (gateway or waypoint) and the resource usage of a
+# container, and changing an istiod environment variable through the chart.
+# Sourced — not executed.
 #
 # The caller sets ISTIO_NAMESPACE; istiod_set_env also needs HELM_RELEASE and
 # HELM_CHART_PATH. Checks (proxy_has_cluster) and reads (proxy_stat) return
@@ -47,19 +48,22 @@ proxy_stat() {
   awk '{print $2}' <<<"${out}"
 }
 
-# proxy_memory <namespace> <pod>: "<working set> <peak>" of the istio-proxy
-# container in MiB. The images are distroless, so nothing is read inside the
-# container. The working set comes from the kubelet summary API, the value
-# the kubelet evicts and reports by. The peak is memory.peak of the container
-# cgroup (cgroup v2, kernel 5.19+), read through the node container, so only
-# on kind; elsewhere it is empty. Either is empty when it cannot be read.
-proxy_memory() {
-  local ns="$1" pod="$2" node cid ws="" peak=""
+# container_stats <namespace> <pod> [container]: "<working set MiB> <peak MiB>
+# <CPU millicores> <CPU seconds>" of one container, istio-proxy by default.
+# The images are distroless, so nothing is read inside the container. The
+# working set and the CPU come from the kubelet summary API: the working set is
+# the value the kubelet evicts and reports by, the millicores an average over
+# the last few seconds, the CPU seconds a counter since the container started.
+# The peak is memory.peak of the container cgroup (cgroup v2, kernel 5.19+),
+# read through the node container, so only on kind. A value that cannot be
+# read is "-".
+container_stats() {
+  local ns="$1" pod="$2" container="${3:-istio-proxy}" node cid usage="" peak="" ws mc cs
   node=$(kubectl get pod -n "${ns}" "${pod}" -o jsonpath='{.spec.nodeName}')
-  ws=$({ kubectl get --raw "/api/v1/nodes/${node}/proxy/stats/summary" 2>/dev/null || true; } |
+  usage=$({ kubectl get --raw "/api/v1/nodes/${node}/proxy/stats/summary" 2>/dev/null || true; } |
     python3 -c '
 import json, sys
-ns, pod = sys.argv[1], sys.argv[2]
+ns, pod, name = sys.argv[1:4]
 try:
     data = json.load(sys.stdin)
 except ValueError:
@@ -67,11 +71,16 @@ except ValueError:
 for p in data.get("pods", []):
     if p["podRef"]["namespace"] == ns and p["podRef"]["name"] == pod:
         for c in p.get("containers", []):
-            if c["name"] == "istio-proxy" and "workingSetBytes" in c.get("memory", {}):
-                print("%.1f" % (c["memory"]["workingSetBytes"] / 1048576))
-' "${ns}" "${pod}")
+            if c["name"] != name:
+                continue
+            mem, cpu = c.get("memory", {}), c.get("cpu", {})
+            ws = "%.1f" % (mem["workingSetBytes"] / 1048576) if "workingSetBytes" in mem else "-"
+            mc = "%.0f" % (cpu["usageNanoCores"] / 1e6) if "usageNanoCores" in cpu else "-"
+            cs = "%.2f" % (cpu["usageCoreNanoSeconds"] / 1e9) if "usageCoreNanoSeconds" in cpu else "-"
+            print(ws, mc, cs)
+' "${ns}" "${pod}" "${container}")
   cid=$(kubectl get pod -n "${ns}" "${pod}" \
-    -o jsonpath='{.status.containerStatuses[?(@.name=="istio-proxy")].containerID}')
+    -o jsonpath="{.status.containerStatuses[?(@.name==\"${container}\")].containerID}")
   cid="${cid#*://}"
   if [ -n "${cid}" ] && command -v docker >/dev/null 2>&1 &&
      docker inspect "${node}" >/dev/null 2>&1; then
@@ -79,22 +88,57 @@ for p in data.get("pods", []):
       "d=\$(find /sys/fs/cgroup -type d -name '*${cid}*' 2>/dev/null | head -1); [ -n \"\$d\" ] && cat \"\$d/memory.peak\"" \
       2>/dev/null | awk 'NF { printf "%.1f", $1 / 1048576 }' || true)
   fi
-  echo "${ws:--} ${peak:--}"
+  read -r ws mc cs <<<"${usage:-- - -}"
+  echo "${ws:--} ${peak:--} ${mc:--} ${cs:--}"
+}
+
+# proxy_cluster_names <namespace> <pod>: the names of the Envoy clusters, one
+# per line. GET clusters prints dozens of lines per cluster, all starting with
+# "<cluster name>::"; only the names are kept, so `set -x` does not echo the
+# whole dump.
+proxy_cluster_names() {
+  proxy_admin "$1" "$2" clusters 2>/dev/null | sed -n 's/::observability_name::.*//p'
 }
 
 # proxy_has_cluster <namespace> <pod> <cluster>
-# Lines of GET clusters start with "<cluster name>::".
 proxy_has_cluster() {
-  local out
-  out=$(proxy_admin "$1" "$2" clusters 2>/dev/null) || return 1
-  grep -qF "$3::" <<<"${out}"
+  local names
+  names=$(proxy_cluster_names "$1" "$2") || return 1
+  grep -qxF "$3" <<<"${names}"
 }
 
 # proxy_outbound_clusters <namespace> <pod>: names of the outbound clusters.
 proxy_outbound_clusters() {
-  local out
-  out=$(proxy_admin "$1" "$2" clusters 2>/dev/null) || return 1
-  grep -F 'outbound|' <<<"${out}" | sed 's/::.*//' | sort -u
+  proxy_cluster_names "$1" "$2" | grep -F 'outbound|' | sort -u
+}
+
+# proxy_endpoints <namespace> <pod>: the number of hosts in all Envoy
+# clusters. Istio does not keep per-cluster stats, so the hosts are counted in
+# GET clusters, which prints one health_flags line per host.
+proxy_endpoints() {
+  { proxy_admin "$1" "$2" clusters 2>/dev/null || true; } | grep -c '::health_flags::' || true
+}
+
+# proxy_wait_endpoints <namespace> <pod> <minimum>
+# Waits until the proxy holds at least <minimum> hosts and the count has not
+# changed over three reads, then prints the count.
+proxy_wait_endpoints() {
+  local ns="$1" pod="$2" min="$3" prev=-1 same=0 cur=0
+  for _ in $(seq 1 120); do
+    cur=$(proxy_endpoints "${ns}" "${pod}")
+    if [ "${cur:-0}" -ge "${min}" ] && [ "${cur}" = "${prev}" ]; then
+      same=$((same + 1))
+      if [ "${same}" -ge 3 ]; then
+        echo "${cur}"
+        return 0
+      fi
+    else
+      same=0
+    fi
+    prev="${cur}"
+    sleep 5
+  done
+  fail "hosts on ${pod} did not settle at >= ${min} (last ${cur})"
 }
 
 # proxy_wait_cluster <namespace> <pod> present|absent <cluster>

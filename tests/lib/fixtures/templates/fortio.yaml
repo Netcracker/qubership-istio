@@ -1,0 +1,70 @@
+{{- with .Values.fortio }}
+{{- $namespace := required "fortio.namespace is required" .namespace }}
+{{- $image := .image | default "fortio/fortio:1.75.3" }}
+{{- $serverNode := .serverNode | default "" }}
+{{- $clientNode := .clientNode | default "" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: echo
+  namespace: {{ $namespace }}
+spec:
+  selector:
+    app: echo
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: echo-direct
+  namespace: {{ $namespace }}
+  labels:
+    istio.io/use-waypoint: none
+spec:
+  selector:
+    app: echo
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+{{- range $name := list "echo" "client" "client-mesh" }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ $namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ $name }}
+  template:
+    metadata:
+      labels:
+        app: {{ $name }}
+        {{- if eq $name "client" }}
+        istio.io/dataplane-mode: none
+        {{- end }}
+    spec:
+      {{- $node := ternary $serverNode $clientNode (eq $name "echo") }}
+      {{- with $node }}
+      nodeSelector:
+        kubernetes.io/hostname: {{ . }}
+      {{- end }}
+      containers:
+      - name: fortio
+        image: {{ $image }}
+        # fortio caps the echo delay at 1.5s by default.
+        args: ["server", "-http-port", "8080", "-max-echo-delay", "10s"]
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            cpu: 100m
+            memory: 64Mi
+{{- end }}
+{{- end }}

@@ -11,6 +11,8 @@ kind: Service
 metadata:
   name: {{ $prefix }}-{{ $i }}
   namespace: {{ $namespace }}
+  labels:
+    tests/services: {{ $prefix }}
 spec:
   ports:
   {{- range $j := until $ports }}

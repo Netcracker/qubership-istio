@@ -1,25 +1,40 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# Calibration runs for docs/internal/hardware-sizing-model.md, section 12.
+# The measurements of docs/internal/hardware-sizing-calibration.md, which give
+# the coefficients of docs/internal/hardware-sizing-model.md.
 #
-#   clusters  Envoy memory per cluster and base: a gateway against the number
-#             of Services in the cluster (one and two ports, flag off and on),
-#             a waypoint against its bound Service ports and against the cluster
-#   workers   memory per cluster of a gateway at CPU limits 1, 2 and 4, which
-#             give 1, 2 and 4 Envoy workers
-#   startup   peak memory of a gateway pod while it loads its first config
+#   clusters   1. Envoy memory per cluster and base: a gateway against the
+#              Services of the cluster (one and two ports, flag off and on), a
+#              waypoint against its bound Service ports and against the cluster
+#   workers    2. memory per cluster of a gateway at CPU limits 1, 2 and 4,
+#              which give 1, 2 and 4 Envoy workers
+#   startup    3. peak memory of a gateway pod while it loads its first config
+#   endpoints  4. Envoy memory per endpoint, on the gateway and the waypoint
+#   traffic    5. gateway and waypoint memory per open connection and per
+#              request in flight, with their CPU per request rate
+#   ztunnel    6. ztunnel memory against the pods and Services of the cluster,
+#              and per connection
+#   istiod     7. istiod memory against Services, pods, routes and connected
+#              proxies, and its CPU against pod churn
 #
-# Usage: tests/sizing/measure.sh [clusters] [workers] [startup]   (default: all)
+# Usage: tests/sizing/measure.sh [measurement...]   (default: all, in that order)
 #
-# Each measurement appends one row to ${OUT_DIR}/measurements.csv;
+# Each reading appends one row to ${OUT_DIR}/measurements.csv;
 # tests/sizing/report.py turns the file into the report.
 #
 # Needs a cluster with the qubership-istio chart installed and the Gateway API
-# CRDs. Creates the namespaces sizing-gw, sizing-wp and sizing-bulk and deletes
-# them at the end (KEEP_RESOURCES=true keeps them). Part of "clusters" sets
+# CRDs. endpoints, ztunnel and istiod need KWOK (tests/lib/fake.sh); traffic
+# and ztunnel pull the fortio image; the connected proxies of istiod need
+# pilot-load, given as PILOT_LOAD=<path to the binary>, and are skipped
+# without it. traffic and ztunnel put the fortio client and server on two
+# different worker nodes when there are two.
+#
+# Creates the namespaces sizing-* and fake nodes and deletes them at the end
+# (KEEP_RESOURCES=true keeps them). Part of "clusters" sets
 # PILOT_FILTER_GATEWAY_CLUSTER_CONFIG=true on istiod through helm, which
-# changes every gateway of that istiod: on a shared cluster set
-# SKIP_FLAG_TOGGLE=true.
+# changes every gateway of that istiod, and "ztunnel" and "istiod" restart
+# ztunnel and istiod: run it on a cluster of its own. On a shared one set
+# SKIP_FLAG_TOGGLE=true and run neither ztunnel nor istiod.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -28,9 +43,22 @@ HELM_RELEASE="${HELM_RELEASE:-qubership-istio}"
 HELM_CHART_PATH="${HELM_CHART_PATH:-}"
 SKIP_FLAG_TOGGLE="${SKIP_FLAG_TOGGLE:-false}"
 KEEP_RESOURCES="${KEEP_RESOURCES:-false}"
+PILOT_LOAD="${PILOT_LOAD:-}"
 OUT_DIR="${OUT_DIR:-sizing-results}"
 CSV="${OUT_DIR}/measurements.csv"
-CSV_HEADER="measurement,proxy,istio_version,cpu_limit,memory_limit,workers,services,ports_per_service,bound_ports,referenced,flag,active_clusters,heap_mi,allocated_mi,working_set_mi,peak_mi,cds_kb,lds_kb,rds_kb"
+ALL_MEASUREMENTS=(clusters workers startup endpoints traffic ztunnel istiod)
+
+# One row per reading. Every row has the first five columns; the others are
+# empty where a measurement has nothing to say.
+CSV_COLUMNS=(
+  measurement proxy istio_version cpu_limit memory_limit workers
+  services ports_per_service bound_ports referenced flag
+  active_clusters heap_mi allocated_mi working_set_mi peak_mi cds_kb lds_kb rds_kb
+  endpoints_per_service hosts pods
+  connections inflight payload_kb rps cpu_m
+  workloads config_objects fake_proxies xds_clients
+  churn_per_min window_s cpu_s pushes convergence_ms
+)
 
 GW_NS=sizing-gw
 GW_NAME=sizing-gw
@@ -42,15 +70,17 @@ FLAG=PILOT_FILTER_GATEWAY_CLUSTER_CONFIG
 # while it is measured.
 PROXY_MEMORY_LIMIT=2Gi
 
-LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib"
+SIZING_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$(cd "${SIZING_DIR}/.." && pwd)/lib"
 source "${LIB_DIR}/utils.sh"
 source "${LIB_DIR}/proxy.sh"
+source "${LIB_DIR}/fake.sh"
 
 # What the cluster holds so far.
 BULK_COUNT=0
 BULK_PORTS=1
 WP_COUNT=0
-FLAG_TOGGLED=false
+FLAG_STATE=false
 ISTIO_VERSION=""
 
 # ---------------------------------------------------------------------------
@@ -58,12 +88,12 @@ ISTIO_VERSION=""
 # ---------------------------------------------------------------------------
 
 if [ "$#" -eq 0 ]; then
-  set -- clusters workers startup
+  set -- "${ALL_MEASUREMENTS[@]}"
 fi
 for e in "$@"; do
-  case "${e}" in
-    clusters|workers|startup) ;;
-    *) fail "unknown measurement '${e}', expected clusters, workers or startup" ;;
+  case " ${ALL_MEASUREMENTS[*]} " in
+    *" ${e} "*) ;;
+    *) fail "unknown measurement '${e}', expected: ${ALL_MEASUREMENTS[*]}" ;;
   esac
 done
 if [ "${SKIP_FLAG_TOGGLE}" != "true" ] && [ -z "${HELM_CHART_PATH}" ]; then
@@ -71,60 +101,99 @@ if [ "${SKIP_FLAG_TOGGLE}" != "true" ] && [ -z "${HELM_CHART_PATH}" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Reading a proxy
+# Rows
 # ---------------------------------------------------------------------------
 
-gw_pod() { proxy_pod "${GW_NS}" "gateway.networking.k8s.io/gateway-name=${GW_NAME}"; }
-wp_pod() { proxy_pod "${WP_NS}" "gateway.networking.k8s.io/gateway-name=${WP_NAME}"; }
+# emit_row <column>=<value>...: appends one row. A later value of a column
+# replaces an earlier one; "-" is written as empty.
+emit_row() {
+  local -A row=([istio_version]="${ISTIO_VERSION}")
+  local kv line="" c v
+  for kv in "$@"; do
+    row["${kv%%=*}"]="${kv#*=}"
+  done
+  for c in "${CSV_COLUMNS[@]}"; do
+    v="${row[${c}]:-}"
+    [ "${v}" = "-" ] && v=""
+    line+="${v},"
+  done
+  echo "${line%,}" >> "${CSV}"
+}
 
-# xds_size_kb <namespace> <pod> <CDS|LDS|RDS>: size in kB of the last full push
-# of that type to the proxy, from the istiod log; empty when the log no longer
-# has it. "PUSH INC" lines are incremental pushes that carry only the changed
-# resources, so they are skipped.
+# xds_size_kb <namespace> <pod> <CDS|LDS|RDS>: size in kB (1000 bytes, as
+# istiod logs it) of the last push of that type to the proxy, from the istiod
+# log, when that push was a full one. A proxy that grew into its config got
+# incremental pushes ("PUSH INC"), which carry only the changes, so the value
+# is empty for it, as it is when the log no longer has the push.
 xds_size_kb() {
   { kubectl logs -n "${ISTIO_NAMESPACE}" deploy/istiod --since=30m 2>/dev/null || true; } |
-    grep -F "$3: PUSH" | grep -vF "$3: PUSH INC" | grep -F "node:$2.$1 " | tail -1 |
+    grep -F "$3: PUSH" | grep -F "node:$2.$1 " | tail -1 | grep -vF "$3: PUSH INC" |
     sed -n 's/.* size:\([0-9.]*\)\([kMG]\{0,1\}B\).*/\1 \2/p' |
-    awk '{ m = ($2 == "MB") ? 1024 : ($2 == "GB") ? 1048576 : ($2 == "B") ? 1/1024 : 1; printf "%.1f", $1 * m }' ||
+    awk '{ m = ($2 == "MB") ? 1000 : ($2 == "GB") ? 1000000 : ($2 == "B") ? 0.001 : 1; printf "%.1f", $1 * m }' ||
     true
 }
 
 limit_of() {
-  kubectl get pod -n "$1" "$2" -o jsonpath="{.spec.containers[?(@.name==\"istio-proxy\")].resources.limits.$3}"
+  kubectl get pod -n "$1" "$2" -o jsonpath="{.spec.containers[?(@.name==\"${4:-istio-proxy}\")].resources.limits.$3}"
 }
 
-# record <measurement> <proxy> <namespace> <pod> <services> <ports> <bound> <referenced> <flag> <min clusters>
-# Waits for the proxy config to settle, then appends one CSV row.
+# record <measurement> <proxy> <namespace> <pod> <min clusters> [<column>=<value>...]
+# Reads a gateway or waypoint and appends one row. With a number as <min
+# clusters>, first waits for its config to settle at that many clusters or
+# more; with "-", reads it as it is.
 #
 # heap_mi is server.memory_physical_size: what tcmalloc holds from the system.
 # It does not shrink when the config does, so a proxy is measured on a fresh
 # pod after anything that lowers its cluster count (restart_gateway).
 # allocated_mi is server.memory_allocated, the part in use.
 record() {
-  local exp="$1" proxy="$2" ns="$3" pod="$4" services="$5" ports="$6" bound="$7" referenced="$8" flag="$9" min="${10}"
-  local clusters heap allocated workers ws peak cds lds rds
-  clusters=$(proxy_wait_clusters_settled "${ns}" "${pod}" "${min}")
+  local exp="$1" proxy="$2" ns="$3" pod="$4" min="$5"
+  shift 5
+  local clusters heap allocated workers ws peak mc
+  if [ "${min}" = "-" ]; then
+    clusters=$(proxy_stat "${ns}" "${pod}" cluster_manager.active_clusters)
+  else
+    clusters=$(proxy_wait_clusters_settled "${ns}" "${pod}" "${min}")
+  fi
   heap=$(proxy_stat "${ns}" "${pod}" server.memory_physical_size | awk '{printf "%.1f", $1/1048576}')
   allocated=$(proxy_stat "${ns}" "${pod}" server.memory_allocated | awk '{printf "%.1f", $1/1048576}')
   workers=$(proxy_stat "${ns}" "${pod}" server.concurrency)
-  read -r ws peak < <(proxy_memory "${ns}" "${pod}")
-  [ "${ws}" = "-" ] && ws=""
-  [ "${peak}" = "-" ] && peak=""
-  cds=$(xds_size_kb "${ns}" "${pod}" CDS)
-  lds=$(xds_size_kb "${ns}" "${pod}" LDS)
-  rds=$(xds_size_kb "${ns}" "${pod}" RDS)
-  echo "${exp},${proxy},${ISTIO_VERSION},$(limit_of "${ns}" "${pod}" cpu),$(limit_of "${ns}" "${pod}" memory),${workers},${services},${ports},${bound},${referenced},${flag},${clusters},${heap},${allocated},${ws},${peak},${cds},${lds},${rds}" >> "${CSV}"
-  log "${exp} ${proxy}: services=${services} ports=${ports} bound=${bound} referenced=${referenced} flag=${flag} workers=${workers} clusters=${clusters} heap=${heap}Mi allocated=${allocated}Mi ws=${ws:-?}Mi peak=${peak:-?}Mi"
+  read -r ws peak mc _ < <(container_stats "${ns}" "${pod}")
+  emit_row "measurement=${exp}" "proxy=${proxy}" \
+    "cpu_limit=$(limit_of "${ns}" "${pod}" cpu)" "memory_limit=$(limit_of "${ns}" "${pod}" memory)" \
+    "workers=${workers}" "flag=${FLAG_STATE}" "active_clusters=${clusters}" \
+    "heap_mi=${heap}" "allocated_mi=${allocated}" "working_set_mi=${ws}" "peak_mi=${peak}" "cpu_m=${mc}" \
+    "cds_kb=$(xds_size_kb "${ns}" "${pod}" CDS)" "lds_kb=$(xds_size_kb "${ns}" "${pod}" LDS)" \
+    "rds_kb=$(xds_size_kb "${ns}" "${pod}" RDS)" "$@"
+  log "${exp} ${proxy}: $* workers=${workers} clusters=${clusters} heap=${heap}Mi allocated=${allocated}Mi ws=${ws}Mi peak=${peak}Mi cpu=${mc}m"
 }
 
 # ---------------------------------------------------------------------------
 # Cluster state
 # ---------------------------------------------------------------------------
 
+gw_pod() { proxy_pod "${GW_NS}" "gateway.networking.k8s.io/gateway-name=${GW_NAME}"; }
+wp_pod() { proxy_pod "${WP_NS}" "gateway.networking.k8s.io/gateway-name=${WP_NAME}"; }
+
+# ensure_namespace <name> [<label>=<value>...]
+ensure_namespace() {
+  local ns="$1"
+  shift
+  kubectl create namespace "${ns}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  if [ "$#" -gt 0 ]; then
+    kubectl label namespace "${ns}" --overwrite "$@" >/dev/null
+  fi
+}
+
+# delete_namespace <name>: deletes it and waits until it is gone.
+delete_namespace() {
+  kubectl delete namespace "$1" --ignore-not-found --wait=true --timeout=10m >/dev/null
+}
+
 reset_bulk() {
   log "resetting ${BULK_NS}"
-  kubectl delete namespace "${BULK_NS}" --ignore-not-found --wait=true >/dev/null
-  kubectl create namespace "${BULK_NS}" >/dev/null
+  delete_namespace "${BULK_NS}"
+  ensure_namespace "${BULK_NS}"
   BULK_COUNT=0
 }
 
@@ -153,6 +222,13 @@ ensure_wp_services() {
   fi
 }
 
+# reset_wp_services: the waypoint namespace back to the waypoint alone.
+reset_wp_services() {
+  kubectl delete service -n "${WP_NS}" -l tests/services=svc --ignore-not-found --wait=true >/dev/null
+  WP_COUNT=0
+  traffic_teardown
+}
+
 # apply_gateway <cpu limit>: the gateway with its proxy resources.
 apply_gateway() {
   fixtures_apply --set-string \
@@ -161,28 +237,34 @@ apply_gateway() {
 
 setup_gateway() {
   log "setting up gateway ${GW_NS}/${GW_NAME}"
-  kubectl create namespace "${GW_NS}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  ensure_namespace "${GW_NS}"
   apply_gateway 1
   kubectl wait gateway/"${GW_NAME}" -n "${GW_NS}" --for=condition=Programmed --timeout=180s >/dev/null
 }
 
 setup_waypoint() {
   log "setting up waypoint ${WP_NS}/${WP_NAME}"
-  kubectl create namespace "${WP_NS}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-  kubectl label namespace "${WP_NS}" --overwrite \
-    istio.io/dataplane-mode=ambient "istio.io/use-waypoint=${WP_NAME}" >/dev/null
+  ensure_namespace "${WP_NS}" istio.io/dataplane-mode=ambient "istio.io/use-waypoint=${WP_NAME}"
   fixtures_apply --set-string \
     "waypoint.name=${WP_NAME},waypoint.namespace=${WP_NS},waypoint.cpuLimit=2,waypoint.memoryLimit=${PROXY_MEMORY_LIMIT}"
   kubectl wait gateway/"${WP_NAME}" -n "${WP_NS}" --for=condition=Programmed --timeout=180s >/dev/null
 }
 
-# restart_gateway: replaces the gateway pod and waits for the new one.
+# restart_gateway, restart_waypoint: replace the pod and wait for the new one.
 restart_gateway() {
   local pod
   pod=$(gw_pod)
   log "restarting ${pod}"
   kubectl delete pod -n "${GW_NS}" "${pod}" --wait=true >/dev/null
   gw_pod >/dev/null
+}
+
+restart_waypoint() {
+  local pod
+  pod=$(wp_pod)
+  log "restarting ${pod}"
+  kubectl delete pod -n "${WP_NS}" "${pod}" --wait=true >/dev/null
+  wp_pod >/dev/null
 }
 
 # set_gateway_cpu <limit>: a fresh gateway pod with that CPU limit, also when
@@ -205,122 +287,52 @@ set_gateway_cpu() {
 
 set_flag() {
   istiod_set_env "${FLAG}" "$1"
+  FLAG_STATE="$1"
+}
+
+# worker_nodes: the real nodes that take ordinary pods, one per line; the
+# control-plane node only when there is nothing else.
+worker_nodes() {
+  local nodes
+  nodes=$(kubectl get nodes -l '!type,!pilot-load.istio.io/node,!node-role.kubernetes.io/control-plane' \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
+  if [ -z "${nodes}" ]; then
+    nodes=$(kubectl get nodes -l '!type,!pilot-load.istio.io/node' \
+      -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
+  fi
+  echo "${nodes}"
 }
 
 cleanup() {
-  if [ "${FLAG_TOGGLED}" = "true" ]; then
+  pilot_load_stop || true
+  if [ "${FLAG_STATE}" = "true" ]; then
     set_flag false || true
   fi
   if [ "${KEEP_RESOURCES}" != "true" ]; then
-    kubectl delete namespace "${GW_NS}" "${WP_NS}" "${BULK_NS}" --ignore-not-found --wait=false >/dev/null || true
+    kubectl get namespace -o name | grep '^namespace/sizing-' |
+      xargs -r kubectl delete --ignore-not-found --wait=false >/dev/null || true
+    kubectl delete service istiod-sizing -n "${ISTIO_NAMESPACE}" --ignore-not-found >/dev/null || true
+    fake_nodes_delete || true
   fi
 }
 
 # ---------------------------------------------------------------------------
-# Measurements. Each CSV row names what it measures: proxy, then the variable.
+# Measurements
 # ---------------------------------------------------------------------------
 
-measure_clusters() {
-  local gw wp gw_base wp_base on_base n k r
-  log "1. Envoy memory per cluster: waypoint against its bound ports, gateway against the Services of the cluster"
-  reset_bulk
-  set_gateway_cpu 1
-  gw=$(gw_pod)
-  wp=$(wp_pod)
-
-  # Waypoint against its bound Service ports, nothing in the bulk namespace.
-  # The minimum is only the base: how many clusters a bound port adds is what
-  # is measured.
-  wp_base=$(proxy_wait_clusters_settled "${WP_NS}" "${wp}" 1)
-  for k in 0 25 50 100 200; do
-    ensure_wp_services "${k}"
-    record waypoint-bound-ports waypoint "${WP_NS}" "${wp}" 0 1 "${k}" 0 false "${wp_base}"
-  done
-
-  # Gateway against the Services of the cluster, and the waypoint with its 200
-  # ports fixed, to see whether it follows the cluster too.
-  gw_base=$(proxy_wait_clusters_settled "${GW_NS}" "${gw}" 1)
-  for n in 0 250 500 1000 2000; do
-    ensure_bulk "${n}" 1
-    record gateway-services gateway "${GW_NS}" "${gw}" "${n}" 1 0 0 false $((gw_base + n))
-    record waypoint-cluster-services waypoint "${WP_NS}" "${wp}" "${n}" 1 200 0 false "${wp_base}"
-  done
-
-  # Flag on: the gateway keeps only the Services its routes reference.
-  if [ "${SKIP_FLAG_TOGGLE}" != "true" ]; then
-    FLAG_TOGGLED=true
-    set_flag true
-    proxy_wait_clusters_below "${GW_NS}" "${gw}" $((gw_base + 1000))
-    restart_gateway
-    gw=$(gw_pod)
-    on_base=$(proxy_wait_clusters_settled "${GW_NS}" "${gw}" 1)
-    for r in 0 250 1000; do
-      if [ "${r}" -gt 0 ]; then
-        fixtures_apply --set-string \
-          "routes.namespace=${BULK_NS},routes.gateway=${GW_NAME},routes.gatewayNamespace=${GW_NS},routes.servicePrefix=svc,routes.count=${r}"
-      fi
-      record gateway-referenced-services gateway "${GW_NS}" "${gw}" 2000 1 0 "${r}" true $((on_base + r))
-    done
-    kubectl delete httproute -n "${BULK_NS}" -l tests/route=bulk --ignore-not-found >/dev/null
-    set_flag false
-    FLAG_TOGGLED=false
-  else
-    log "SKIP_FLAG_TOGGLE=true: gateway with ${FLAG} not measured"
-  fi
-
-  # Two ports per Service, on a fresh pod: the bulk namespace starts empty.
-  reset_bulk
-  BULK_PORTS=2
-  restart_gateway
-  gw=$(gw_pod)
-  for n in 250 1000; do
-    ensure_bulk "${n}" 2
-    record gateway-services gateway "${GW_NS}" "${gw}" "${n}" 2 0 0 false $((gw_base + 2 * n))
-  done
-}
-
-measure_workers() {
-  local gw cpu base
-  log "2. Gateway memory per cluster against Envoy workers: CPU limits 1, 2 and 4"
-  reset_bulk
-  for cpu in 1 2 4; do
-    set_gateway_cpu "${cpu}"
-    gw=$(gw_pod)
-    record gateway-workers gateway "${GW_NS}" "${gw}" 0 1 0 0 false 1
-  done
-  gw=$(gw_pod)
-  base=$(proxy_wait_clusters_settled "${GW_NS}" "${gw}" 1)
-  ensure_bulk 1000 1
-  for cpu in 4 2 1; do
-    set_gateway_cpu "${cpu}"
-    gw=$(gw_pod)
-    record gateway-workers gateway "${GW_NS}" "${gw}" 1000 1 0 0 false $((base + 1000))
-  done
-}
-
-measure_startup() {
-  local gw base n
-  log "3. Gateway memory peak while it loads its first config"
-  reset_bulk
-  set_gateway_cpu 1
-  gw=$(gw_pod)
-  base=$(proxy_wait_clusters_settled "${GW_NS}" "${gw}" 1)
-  for n in 1000 2000; do
-    ensure_bulk "${n}" 1
-    gw=$(gw_pod)
-    proxy_wait_clusters_settled "${GW_NS}" "${gw}" $((base + n)) >/dev/null
-    restart_gateway
-    gw=$(gw_pod)
-    record gateway-startup gateway "${GW_NS}" "${gw}" "${n}" 1 0 0 false $((base + n))
-  done
-}
+source "${SIZING_DIR}/envoy.sh"
+source "${SIZING_DIR}/traffic.sh"
+source "${SIZING_DIR}/ztunnel.sh"
+source "${SIZING_DIR}/istiod.sh"
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 mkdir -p "${OUT_DIR}"
-[ -s "${CSV}" ] || echo "${CSV_HEADER}" > "${CSV}"
+if [ ! -s "${CSV}" ]; then
+  (IFS=,; echo "${CSV_COLUMNS[*]}") > "${CSV}"
+fi
 ISTIO_VERSION=$(kubectl get deployment istiod -n "${ISTIO_NAMESPACE}" \
   -o jsonpath='{.spec.template.spec.containers[0].image}' | sed 's/.*://')
 log "Istio ${ISTIO_VERSION}, measurements: $*"

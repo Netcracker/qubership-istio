@@ -1,0 +1,20 @@
+# kind cluster for tests/sizing/measure.sh: a control plane and two workers,
+# so that fortio clients and servers talk across nodes through two ztunnels.
+# The controller manager gets a higher API rate than its default 20 requests
+# per second: it creates and deletes thousands of fake pods and their
+# EndpointSlices during the run.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  ipFamily: ipv4
+nodes:
+- role: control-plane
+  kubeadmConfigPatches:
+  - |
+    kind: ClusterConfiguration
+    controllerManager:
+      extraArgs:
+        kube-api-qps: "200"
+        kube-api-burst: "400"
+- role: worker
+- role: worker

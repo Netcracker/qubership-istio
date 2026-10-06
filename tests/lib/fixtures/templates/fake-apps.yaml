@@ -1,0 +1,61 @@
+{{- with .Values.fakeApps }}
+{{- $namespace := required "fakeApps.namespace is required" .namespace }}
+{{- $prefix := required "fakeApps.prefix is required" .prefix }}
+{{- $from := int (required "fakeApps.from is required" .from) }}
+{{- $to := int (required "fakeApps.to is required" .to) }}
+{{- $replicas := int (.replicas | default 1) }}
+{{- $ambient := eq (toString .ambient) "true" }}
+{{- range $i := untilStep $from (int (add $to 1)) 1 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $prefix }}-{{ $i }}
+  namespace: {{ $namespace }}
+  labels:
+    tests/apps: {{ $prefix }}
+spec:
+  selector:
+    app: {{ $prefix }}-{{ $i }}
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $prefix }}-{{ $i }}
+  namespace: {{ $namespace }}
+  labels:
+    tests/apps: {{ $prefix }}
+spec:
+  replicas: {{ $replicas }}
+  selector:
+    matchLabels:
+      app: {{ $prefix }}-{{ $i }}
+  template:
+    metadata:
+      labels:
+        app: {{ $prefix }}-{{ $i }}
+        tests/apps: {{ $prefix }}
+      {{- if $ambient }}
+      annotations:
+        # What istio-cni sets on a pod it captured. KWOK pods have no CNI, so
+        # the annotation is set here for istiod to treat them as HBONE workloads.
+        ambient.istio.io/redirection: enabled
+      {{- end }}
+    spec:
+      nodeSelector:
+        type: kwok
+      tolerations:
+      - key: kwok.x-k8s.io/node
+        operator: Exists
+        effect: NoSchedule
+      containers:
+      - name: app
+        image: fake-image
+        ports:
+        - containerPort: 8080
+{{- end }}
+{{- end }}

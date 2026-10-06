@@ -2,7 +2,8 @@ apiVersion: v2
 name: test-fixtures
 description: >-
   Kubernetes objects for the scripts under tests/: gateways, waypoints,
-  routes, Services without endpoints, an EnvoyFilter that names a cluster.
+  routes, Services without endpoints, an EnvoyFilter that names a cluster,
+  KWOK nodes and the apps on them, fortio servers and clients.
   Rendered with helm template and applied with kubectl, never installed.
 type: application
 version: 0.1.0
