@@ -58,6 +58,7 @@ CSV_COLUMNS=(
   connections inflight payload_kb rps cpu_m
   workloads config_objects fake_proxies xds_clients
   churn_per_min window_s cpu_s pushes convergence_ms
+  open_connections latency_ms sockets load_errors_pct load_ok
 )
 
 GW_NS=sizing-gw
@@ -105,8 +106,17 @@ fi
 # ---------------------------------------------------------------------------
 
 # emit_row <column>=<value>...: appends one row. A later value of a column
-# replaces an earlier one; "-" is written as empty.
+# replaces an earlier one; "-" is written as empty. With DEFER_ROWS=true the
+# row is kept until flush_rows, which can add columns known only later, such
+# as what a load achieved.
+DEFER_ROWS=false
+PENDING_ROWS=()
 emit_row() {
+  if [ "${DEFER_ROWS}" = true ]; then
+    local IFS=$'\x1f'
+    PENDING_ROWS+=("$*")
+    return 0
+  fi
   local -A row=([istio_version]="${ISTIO_VERSION}")
   local kv line="" c v
   for kv in "$@"; do
@@ -118,6 +128,19 @@ emit_row() {
     line+="${v},"
   done
   echo "${line%,}" >> "${CSV}"
+}
+
+# flush_rows [<column>=<value>...]: appends the deferred rows with these
+# columns added, and stops deferring.
+flush_rows() {
+  local r
+  local -a kv
+  DEFER_ROWS=false
+  for r in "${PENDING_ROWS[@]}"; do
+    IFS=$'\x1f' read -r -a kv <<<"${r}"
+    emit_row "${kv[@]}" "$@"
+  done
+  PENDING_ROWS=()
 }
 
 # xds_size_kb <namespace> <pod> <CDS|LDS|RDS>: size in kB (1000 bytes, as

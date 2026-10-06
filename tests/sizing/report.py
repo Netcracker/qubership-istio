@@ -101,11 +101,19 @@ def main(path):
                   "cds_kb", "lds_kb", "rds_kb", "endpoints_per_service", "hosts", "pods",
                   "connections", "inflight", "payload_kb", "rps", "cpu_m", "workloads",
                   "config_objects", "fake_proxies", "xds_clients", "churn_per_min", "window_s",
-                  "cpu_s", "pushes", "convergence_ms"):
+                  "cpu_s", "pushes", "convergence_ms", "open_connections", "latency_ms",
+                  "sockets", "load_errors_pct"):
             r[k] = num(r.get(k))
     by_exp = defaultdict(list)
     for r in rows:
         by_exp[r["measurement"]].append(r)
+    # Rows whose load did not run as asked are shown but left out of the fits.
+    # CSVs from before load_ok: a step under load whose proxy used next to no
+    # CPU was read after fortio had stopped.
+    for r in rows:
+        if not r.get("load_ok") and (r["connections"] or 0) > 0 and r["cpu_m"] is not None and r["cpu_m"] < 20:
+            r["load_ok"] = "false"
+    failed_loads = [r for r in rows if r.get("load_ok") == "false"]
 
     out = []
     p = out.append
@@ -266,6 +274,15 @@ def main(path):
         if ratios:
             found["startup_margin"] = max(ratios)
         p("")
+    # Fresh pods with endpoints load more at start: their peak counts too.
+    ep_ratios = [(r["peak_mi"] / r["working_set_mi"], r) for r in by_exp["gateway-endpoints"] + by_exp["waypoint-endpoints"]
+                 if r["peak_mi"] and r["working_set_mi"]]
+    if ep_ratios:
+        worst, wr = max(ep_ratios, key=lambda t: t[0])
+        if worst > found.get("startup_margin", 0):
+            found["startup_margin"] = worst
+            notes.append(f"The startup peak is highest with endpoints: {worst:.2f} times the steady working set on the "
+                         f"{wr['proxy']} with {wr['endpoints_per_service']:g} endpoints per Service (measurement 4).")
 
     # 4. Endpoints
     if by_exp["gateway-endpoints"] or by_exp["waypoint-endpoints"]:
@@ -277,11 +294,13 @@ def main(path):
             if not sub:
                 continue
             p(f"### {name}\n")
-            p("| Endpoints per Service | Hosts in Envoy | Clusters | Working set, Mi | Heap, Mi | Heap in use, Mi |")
-            p("|---|---|---|---|---|---|")
+            p("| Endpoints per Service | Hosts in Envoy | Clusters | Working set, Mi | Peak, Mi | Peak / working set | Heap, Mi | Heap in use, Mi |")
+            p("|---|---|---|---|---|---|---|---|")
             for r in sub:
+                ratio = r["peak_mi"] / r["working_set_mi"] if r["peak_mi"] and r["working_set_mi"] else None
                 p(f"| {cell(r['endpoints_per_service'])} | {cell(r['hosts'])} | {cell(r['active_clusters'])} | "
-                  f"{cell(r['working_set_mi'])} | {cell(r['heap_mi'])} | {cell(r['allocated_mi'])} |")
+                  f"{cell(r['working_set_mi'])} | {cell(r['peak_mi'])} | {cell(ratio, '{:.2f}')} | "
+                  f"{cell(r['heap_mi'])} | {cell(r['allocated_mi'])} |")
             p("")
             f_ws = fit([r["pods"] for r in sub], [r["working_set_mi"] for r in sub])
             f_al = fit([r["pods"] for r in sub], [r["allocated_mi"] for r in sub])
@@ -303,18 +322,23 @@ def main(path):
         p("## 5. Gateway and waypoint under load\n")
         p("Fresh pod per step, read under load. kConn comes from connections at about one request per "
           "second each, kReq from connections that each hold a request in flight for "
-          "two seconds. CPU on a shared CI runner is indicative only.\n")
+          "two seconds; requests in flight are fortio's rate times its mean latency. Steps whose load failed "
+          "(load_ok false: fortio aborted, more than 1% errors, or keep-alive broken) are shown and left out. "
+          "CPU on a shared CI runner is indicative only.\n")
         for exp, name in (("gateway-traffic", "Gateway"), ("waypoint-traffic", "Waypoint")):
             sub = by_exp[exp]
             if not sub:
                 continue
             p(f"### {name}\n")
-            p("| Connections | In flight | Body, KiB | Requests/s | Working set, Mi | Heap in use, Mi | CPU, m |")
-            p("|---|---|---|---|---|---|---|")
+            p("| Connections | Sockets | In flight | Body, KiB | Requests/s | Latency, ms | Errors, % | Load ok | "
+              "Working set, Mi | Heap in use, Mi | CPU, m |")
+            p("|---|---|---|---|---|---|---|---|---|---|---|")
             for r in sub:
-                p(f"| {cell(r['connections'])} | {cell(r['inflight'])} | {cell(r['payload_kb'])} | {cell(r['rps'])} | "
+                p(f"| {cell(r['connections'])} | {cell(r['sockets'])} | {cell(r['inflight'])} | {cell(r['payload_kb'])} | "
+                  f"{cell(r['rps'])} | {cell(r['latency_ms'])} | {cell(r['load_errors_pct'])} | {r.get('load_ok') or '–'} | "
                   f"{cell(r['working_set_mi'])} | {cell(r['allocated_mi'])} | {cell(r['cpu_m'])} |")
             p("")
+            sub = [r for r in sub if r.get("load_ok") != "false"]
             small = [r for r in sub if (r["payload_kb"] or 0) <= 1]
             for col, label in (("working_set_mi", "Working set"), ("allocated_mi", "Heap in use")):
                 f = fit2([r["connections"] for r in small], [r["inflight"] for r in small], [r[col] for r in small])
@@ -372,11 +396,13 @@ def main(path):
             p("\n### Per connection\n")
             p("client-mesh to echo-direct: the ztunnel of the client node and the ztunnel of the server node, "
               "no waypoint, about one request per second per connection.\n")
-            p("| ztunnel | Connections | Working set, Mi | CPU, m |")
-            p("|---|---|---|---|")
+            p("| ztunnel | Connections | Sockets | Requests/s | Errors, % | Load ok | Working set, Mi | CPU, m |")
+            p("|---|---|---|---|---|---|---|---|")
             for r in conns:
-                p(f"| {r['proxy']} | {cell(r['connections'])} | {cell(r['working_set_mi'])} | {cell(r['cpu_m'])} |")
+                p(f"| {r['proxy']} | {cell(r['connections'])} | {cell(r['sockets'])} | {cell(r['rps'])} | "
+                  f"{cell(r['load_errors_pct'])} | {r.get('load_ok') or '–'} | {cell(r['working_set_mi'])} | {cell(r['cpu_m'])} |")
             p("")
+            conns = [r for r in conns if r.get("load_ok") != "false"]
             total = 0.0
             sides = 0
             for side in sorted({r["proxy"] for r in conns}):
@@ -395,7 +421,7 @@ def main(path):
     size = by_exp["istiod-cluster-size"]
     if size or by_exp["istiod-routes"] or by_exp["istiod-churn"]:
         p("## 7. istiod\n")
-        p("Fresh istiod per step for Services, pods and routes. Heap is the Go heap in use.\n")
+        p("Fresh istiod per step for Services, pods and routes. Heap is the Go heap in use right after a forced GC.\n")
         if size:
             p("### Services and pods\n")
             p("| Services | Pods | Working set, Mi | Heap, Mi |")
@@ -473,13 +499,20 @@ def main(path):
         got = found[key]
         dev = (got - model) / model
         mark = ""
-        if abs(dev) > DEVIATION:
+        if key in CONSERVATIVE and dev > 0:
+            # Set high on purpose, so any measured value above it is unsafe.
+            mark = " **update**"
+        elif abs(dev) > DEVIATION:
             mark = " model on the safe side" if key in CONSERVATIVE and dev < 0 else " **update**"
         p(f"| {key} | {model} | {got:.4g} | {dev:+.0%}{mark} |")
     p("")
     p(f"Deviations above {DEVIATION:.0%} are marked. Bases, clusters per Service and the margin are set high "
-      "on purpose, so a lower measured value leaves the model on the safe side. `clusters_per_service` is not measured here: "
+      "on purpose, so a lower measured value leaves the model on the safe side and any higher one is marked. `clusters_per_service` is not measured here: "
       "synthetic Services have no subsets, so the measurements give clusters per port only.\n")
+    if failed_loads:
+        notes.append(f"{len(failed_loads)} load step(s) did not run as asked and are left out of the fits: "
+                     + ", ".join(f"{r['measurement']} {r['proxy']} {r['connections']:g} connections" for r in failed_loads)
+                     + ". The fortio lines of the Measure step log say why.")
     if notes:
         p("## Notes\n")
         for n in notes:
@@ -492,7 +525,7 @@ def main(path):
             "working_set_mi", "peak_mi", "cds_kb", "lds_kb", "rds_kb", "endpoints_per_service",
             "hosts", "pods", "connections", "inflight", "payload_kb", "rps", "cpu_m", "workloads",
             "config_objects", "fake_proxies", "xds_clients", "churn_per_min", "window_s", "cpu_s",
-            "pushes", "convergence_ms"]
+            "pushes", "convergence_ms", "open_connections", "latency_ms", "sockets", "load_errors_pct", "load_ok"]
     # Columns no row has a value in are left out.
     cols = [c for c in cols if any(r.get(c) not in (None, "") for r in rows)]
     p("| " + " | ".join(cols) + " |")

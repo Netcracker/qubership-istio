@@ -25,6 +25,10 @@ CLIENT_NODE=""
 SERVER_NODE=""
 LOAD_PID=""
 LOAD_LOG=""
+LOAD_FIELDS=()
+# A load whose errors exceed this share of requests, or that opened more than
+# 10% more sockets than connections (keep-alive failing), is marked load_ok=false.
+LOAD_MAX_ERRORS_PCT=1
 
 client_pod() { proxy_pod "${WP_NS}" "app=$1"; }
 
@@ -75,7 +79,9 @@ traffic_teardown() {
 
 # run_load <client> <url> <connections> <requests per second> [<body bytes>]
 # Starts fortio in the background for LOAD_SECONDS, requests spread evenly
-# over the connections, a body of that size in both directions.
+# over the connections, a body of that size in both directions. Without
+# -allow-initial-errors fortio gives up when one warmup request of a
+# connection fails, and the proxy is then read with no load on it.
 run_load() {
   local client="$1" url="$2" c="$3" qps="$4" body="${5:-0}" args=()
   if [ "${body}" -gt 0 ]; then
@@ -85,18 +91,40 @@ run_load() {
   LOAD_LOG=$(mktemp)
   log "load: ${c} connections, ${qps} requests/s, ${body} B bodies, ${url}"
   kubectl exec -n "${WP_NS}" "$(client_pod "${client}")" -c fortio -- \
-    /usr/bin/fortio load -quiet -uniform -nocatchup -c "${c}" -qps "${qps}" -t "${LOAD_SECONDS}s" -timeout 30s \
+    /usr/bin/fortio load -quiet -uniform -nocatchup -allow-initial-errors \
+    -c "${c}" -qps "${qps}" -t "${LOAD_SECONDS}s" -timeout 30s \
     "${args[@]}" "${url}" >"${LOAD_LOG}" 2>&1 &
   LOAD_PID=$!
+  LOAD_CONNECTIONS="${c}"
 }
 
-# wait_load: waits for the load to end and logs what fortio achieved.
+# wait_load: waits for the load to end, logs what fortio achieved and sets
+# LOAD_FIELDS to the columns that say it: the rate it reached, the mean
+# latency, the requests in flight these give (rate times latency), the
+# sockets it opened, the share of failed requests, and load_ok.
 wait_load() {
+  local rc=0 summary
+  LOAD_FIELDS=()
   [ -n "${LOAD_PID}" ] || return 0
-  wait "${LOAD_PID}" || log "fortio exited with $?"
-  grep -E 'All done|^Code ' "${LOAD_LOG}" | sed 's/^/  fortio: /' >&2 || true
-  rm -f "${LOAD_LOG}"
+  wait "${LOAD_PID}" || rc=$?
   LOAD_PID=""
+  [ "${rc}" -eq 0 ] || log "fortio exited with ${rc}"
+  grep -E 'Aborting|Sockets used|All done|^Code ' "${LOAD_LOG}" | sed 's/^/  fortio: /' >&2 || true
+  summary=$(awk -v c="${LOAD_CONNECTIONS}" -v maxerr="${LOAD_MAX_ERRORS_PCT}" '
+    /^Aborting/ { aborted = 1 }
+    /^Sockets used:/ { sockets = $3 }
+    /^All done/ { for (i = 1; i <= NF; i++) { if ($i == "ms") ms = $(i - 1); if ($i == "qps") qps = $(i - 1) } }
+    /^Code 200 :/ { ok = $4 }
+    /^Code / { total += $4 }
+    END {
+      err = total > 0 ? 100 * (total - ok) / total : 100
+      good = (!aborted && qps != "" && err <= maxerr && sockets <= 1.1 * c) ? "true" : "false"
+      printf "rps=%.0f latency_ms=%.1f inflight=%.0f sockets=%d load_errors_pct=%.2f load_ok=%s\n",
+        qps, ms, qps * ms / 1000, sockets, err, good
+    }' "${LOAD_LOG}")
+  rm -f "${LOAD_LOG}"
+  read -r -a LOAD_FIELDS <<<"${summary}"
+  log "load: ${summary}"
 }
 
 # traffic_step <gateway|waypoint> <connections> <in flight: 0 or the connections> <body KiB>
@@ -119,15 +147,21 @@ traffic_step() {
     qps=$((c / TRAFFIC_DELAY_S))
     url="${url}?delay=${TRAFFIC_DELAY_S}s"
   fi
-  if [ "${c}" -gt 0 ]; then
-    run_load "${client}" "${url}" "${c}" "${qps}" $((kib * 1024))
-    sleep "${LOAD_READ_AFTER}"
-  else
-    qps=0
+  if [ "${c}" -eq 0 ]; then
+    record "${proxy}-traffic" "${proxy}" "${ns}" "${pod}" - \
+      connections=0 inflight=0 payload_kb=0 rps=0
+    return 0
   fi
+  # The proxy is read under load; the row is written once fortio has said
+  # what the load was.
+  run_load "${client}" "${url}" "${c}" "${qps}" $((kib * 1024))
+  sleep "${LOAD_READ_AFTER}"
+  DEFER_ROWS=true
   record "${proxy}-traffic" "${proxy}" "${ns}" "${pod}" - \
-    connections="${c}" inflight="${inflight}" payload_kb="${kib}" rps="${qps}"
+    connections="${c}" payload_kb="${kib}" \
+    open_connections="$(proxy_stat "${ns}" "${pod}" server.total_connections || echo -)"
   wait_load
+  flush_rows "${LOAD_FIELDS[@]}"
 }
 
 measure_traffic() {

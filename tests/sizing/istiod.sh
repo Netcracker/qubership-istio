@@ -110,11 +110,15 @@ restart_istiod() {
 }
 
 # record_istiod <measurement> [<column>=<value>...]
-# heap_mi is the Go heap in use, allocated_mi the live objects in it.
+# heap_mi is the Go heap in use, allocated_mi the objects in it, both read
+# right after a garbage collection forced through pprof (heap?gc=1): without
+# it they follow the GC cycle and vary by more than what a step adds.
 record_istiod() {
   local exp="$1" pod s x heap alloc ws peak mc
   shift
   pod=$(istiod_pod)
+  kubectl get --raw "/api/v1/namespaces/${ISTIO_NAMESPACE}/pods/${pod}:15014/proxy/debug/pprof/heap?gc=1" \
+    >/dev/null 2>&1 || log "istiod: forcing a GC through pprof failed, heap read as it is"
   read -r s x heap alloc _ < <(istiod_metrics "${pod}")
   read -r ws peak mc _ < <(container_stats "${ISTIO_NAMESPACE}" "${pod}" discovery)
   emit_row "measurement=${exp}" proxy=istiod \

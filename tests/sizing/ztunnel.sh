@@ -162,14 +162,18 @@ measure_ztunnel() {
     if [ "${c}" -gt 0 ]; then
       run_load client-mesh "$(direct_url)" "${c}" "${c}"
       sleep "${LOAD_READ_AFTER}"
+      DEFER_ROWS=true
     fi
     if [ "${zc}" = "${zs}" ]; then
-      record_ztunnel ztunnel-connections ztunnel-both "${zc}" - - connections="${c}" rps="${c}"
+      record_ztunnel ztunnel-connections ztunnel-both "${zc}" - - connections="${c}" rps=0
     else
-      record_ztunnel ztunnel-connections ztunnel-client "${zc}" - - connections="${c}" rps="${c}"
-      record_ztunnel ztunnel-connections ztunnel-server "${zs}" - - connections="${c}" rps="${c}"
+      record_ztunnel ztunnel-connections ztunnel-client "${zc}" - - connections="${c}" rps=0
+      record_ztunnel ztunnel-connections ztunnel-server "${zs}" - - connections="${c}" rps=0
     fi
-    wait_load
+    if [ "${c}" -gt 0 ]; then
+      wait_load
+      flush_rows "${LOAD_FIELDS[@]}"
+    fi
   done
   traffic_teardown
 }
