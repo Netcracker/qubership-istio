@@ -15,7 +15,7 @@ waypoint: {}
 
 # One path of a gateway to port 80 of a Service.
 #   name, namespace, gateway, gatewayNamespace, backend (required)
-#   pathPrefix (default /)
+#   pathPrefix (default /), hostname (optional)
 httpRoute: {}
 
 # Services <prefix>-<from>..<prefix>-<to> without a selector, so without
@@ -23,6 +23,7 @@ httpRoute: {}
 # tests/services=<prefix>.
 #   namespace, prefix, from, to (required)
 #   ports (default 1)
+#   selector (default false): select app=<prefix>-<i>, for the workloadEntries block
 services: {}
 
 # HTTPRoutes from a gateway to <servicePrefix>-1..<servicePrefix>-<count> on
@@ -72,3 +73,28 @@ fortio: {}
 # simulated proxies running outside the cluster.
 #   namespace, nodePort (required)
 istiodNodePort: {}
+
+# EndpointSlices for the Services <prefix>-<from>..<prefix>-<to> of the
+# services block (which have no selector), each with <endpoints> ready
+# endpoints on port 8080, so the Services get endpoints without pods. The
+# addresses come from 198.18.0.0/15, a range reserved for benchmarks that no
+# network routes: nothing ever connects to them.
+#   namespace, prefix, from, to (required)
+#   endpoints (default 1)
+endpointSlices: {}
+
+# WorkloadEntries for the Services <prefix>-<from>..<prefix>-<to> of the
+# services block with selector=true: <endpoints> per Service, labeled
+# app=<prefix>-<i>, which Kubernetes Services select in Istio. Each is
+# annotated the way istio-cni annotates a captured pod, so istiod sends it as
+# an ambient workload and gateways reach it over HBONE: the endpoints cost
+# what mesh pods cost, without pods. Addresses as in endpointSlices.
+#   namespace, prefix, from, to (required)
+#   endpoints (default 1)
+workloadEntries: {}
+
+# An AuthorizationPolicy on a gateway that denies every request for one host:
+# with a route that exists only to keep a Service's cluster on the gateway
+# (pinned under PILOT_FILTER_GATEWAY_CLUSTER_CONFIG), nobody can use that route.
+#   name, namespace, gateway, host (required)
+denyHost: {}

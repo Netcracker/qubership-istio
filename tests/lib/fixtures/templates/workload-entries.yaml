@@ -1,0 +1,25 @@
+{{- with .Values.workloadEntries }}
+{{- $namespace := required "workloadEntries.namespace is required" .namespace }}
+{{- $prefix := required "workloadEntries.prefix is required" .prefix }}
+{{- $from := int (required "workloadEntries.from is required" .from) }}
+{{- $to := int (required "workloadEntries.to is required" .to) }}
+{{- $endpoints := int (.endpoints | default 1) }}
+{{- range $i := untilStep $from (int (add $to 1)) 1 }}
+{{- range $j := until $endpoints }}
+{{- $k := add (mul (sub $i 1) $endpoints) $j }}
+---
+apiVersion: networking.istio.io/v1
+kind: WorkloadEntry
+metadata:
+  name: {{ $prefix }}-{{ $i }}-{{ $j }}
+  namespace: {{ $namespace }}
+  labels:
+    app: {{ $prefix }}-{{ $i }}
+    tests/workload-entries: {{ $prefix }}
+  annotations:
+    ambient.istio.io/redirection: enabled
+spec:
+  address: "198.{{ add 18 (div $k 65536) }}.{{ mod (div $k 256) 256 }}.{{ mod $k 256 }}"
+{{- end }}
+{{- end }}
+{{- end }}

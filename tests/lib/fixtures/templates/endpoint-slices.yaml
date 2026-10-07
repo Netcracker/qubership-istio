@@ -1,0 +1,31 @@
+{{- with .Values.endpointSlices }}
+{{- $namespace := required "endpointSlices.namespace is required" .namespace }}
+{{- $prefix := required "endpointSlices.prefix is required" .prefix }}
+{{- $from := int (required "endpointSlices.from is required" .from) }}
+{{- $to := int (required "endpointSlices.to is required" .to) }}
+{{- $endpoints := int (.endpoints | default 1) }}
+{{- range $i := untilStep $from (int (add $to 1)) 1 }}
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: {{ $prefix }}-{{ $i }}
+  namespace: {{ $namespace }}
+  labels:
+    kubernetes.io/service-name: {{ $prefix }}-{{ $i }}
+    endpointslice.kubernetes.io/managed-by: tests.sizing
+addressType: IPv4
+ports:
+- name: http-0
+  port: 8080
+  protocol: TCP
+endpoints:
+{{- range $j := until $endpoints }}
+{{- $k := add (mul (sub $i 1) $endpoints) $j }}
+- addresses:
+  - "198.{{ add 18 (div $k 65536) }}.{{ mod (div $k 256) 256 }}.{{ mod $k 256 }}"
+  conditions:
+    ready: true
+{{- end }}
+{{- end }}
+{{- end }}

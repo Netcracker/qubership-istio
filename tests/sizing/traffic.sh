@@ -26,8 +26,10 @@ SERVER_NODE=""
 LOAD_PID=""
 LOAD_LOG=""
 LOAD_FIELDS=()
-# A load whose errors exceed this share of requests, or that opened more than
-# 10% more sockets than connections (keep-alive failing), is marked load_ok=false.
+# A load that fortio gave up, or whose errors exceed this share of requests,
+# is marked load_ok=false. Sockets above the connections mean the proxy closed
+# some connections and fortio opened new ones; the open connections at the
+# reading still match, so that alone does not fail a step.
 LOAD_MAX_ERRORS_PCT=1
 
 client_pod() { proxy_pod "${WP_NS}" "app=$1"; }
@@ -95,7 +97,6 @@ run_load() {
     -c "${c}" -qps "${qps}" -t "${LOAD_SECONDS}s" -timeout 30s \
     "${args[@]}" "${url}" >"${LOAD_LOG}" 2>&1 &
   LOAD_PID=$!
-  LOAD_CONNECTIONS="${c}"
 }
 
 # wait_load: waits for the load to end, logs what fortio achieved and sets
@@ -110,7 +111,7 @@ wait_load() {
   LOAD_PID=""
   [ "${rc}" -eq 0 ] || log "fortio exited with ${rc}"
   grep -E 'Aborting|Sockets used|All done|^Code ' "${LOAD_LOG}" | sed 's/^/  fortio: /' >&2 || true
-  summary=$(awk -v c="${LOAD_CONNECTIONS}" -v maxerr="${LOAD_MAX_ERRORS_PCT}" '
+  summary=$(awk -v maxerr="${LOAD_MAX_ERRORS_PCT}" '
     /^Aborting/ { aborted = 1 }
     /^Sockets used:/ { sockets = $3 }
     /^All done/ { for (i = 1; i <= NF; i++) { if ($i == "ms") ms = $(i - 1); if ($i == "qps") qps = $(i - 1) } }
@@ -118,7 +119,7 @@ wait_load() {
     /^Code / { total += $4 }
     END {
       err = total > 0 ? 100 * (total - ok) / total : 100
-      good = (!aborted && qps != "" && err <= maxerr && sockets <= 1.1 * c) ? "true" : "false"
+      good = (!aborted && qps != "" && err <= maxerr) ? "true" : "false"
       printf "rps=%.0f latency_ms=%.1f inflight=%.0f sockets=%d load_errors_pct=%.2f load_ok=%s\n",
         qps, ms, qps * ms / 1000, sockets, err, good
     }' "${LOAD_LOG}")

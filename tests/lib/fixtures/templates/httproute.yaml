@@ -8,6 +8,10 @@ spec:
   parentRefs:
   - name: {{ required "httpRoute.gateway is required" .gateway }}
     namespace: {{ required "httpRoute.gatewayNamespace is required" .gatewayNamespace }}
+  {{- with .hostname }}
+  hostnames:
+  - {{ . | quote }}
+  {{- end }}
   rules:
   - matches:
     - path:

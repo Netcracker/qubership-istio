@@ -15,22 +15,30 @@ from collections import defaultdict
 # The values docs/internal/hardware-sizing-model.md uses. Keep in sync.
 MODEL = {
     "per_cluster_mi": 0.092,
+    "per_endpoint_mi": 0.018,
     "gateway_base_mi": 50.0,
     "waypoint_base_mi": 75.0,
     "clusters_per_service": 1.7,
     "clusters_per_waypoint_port": 1.6,
-    "startup_margin": 1.3,
+    "startup_margin": 1.4,
+    "kconn_mi": 0.07,
+    "kreq_mi": 0.04,
     "ztunnel_base_mi": 150.0,
-    "ztunnel_per_connection_mi": 0.05,
-    "istiod_per_pod_mi": 1.5,
-    "istiod_per_config_object_mi": 0.5,
+    "ztunnel_per_pod_mi": 0.008,
+    "ztunnel_per_service_mi": 0.004,
+    "ztunnel_per_connection_mi": 0.03,
+    "istiod_base_mi": 50.0,
+    "istiod_per_service_mi": 0.07,
+    "istiod_per_pod_mi": 0.05,
+    "istiod_per_config_object_mi": 0.05,
 }
 DEVIATION = 0.10
 # Set high on purpose: a measured value below them leaves the model on the safe side.
 # clusters_per_waypoint_port is measured on Services without endpoints, which may
 # give a waypoint fewer clusters than real ones.
 CONSERVATIVE = {"gateway_base_mi", "waypoint_base_mi", "clusters_per_service",
-                "clusters_per_waypoint_port", "startup_margin", "ztunnel_base_mi"}
+                "clusters_per_waypoint_port", "startup_margin", "ztunnel_base_mi",
+                "istiod_per_config_object_mi"}
 # The trafficReserveMi of the profiles, read against kConn and kReq.
 TRAFFIC_RESERVES_MI = (32, 128)
 
@@ -111,6 +119,10 @@ def main(path):
     # CSVs from before load_ok: a step under load whose proxy used next to no
     # CPU was read after fortio had stopped.
     for r in rows:
+        # Before the sockets stopped failing a step: keep-alive breaks alone do not.
+        if r.get("load_ok") == "false" and r.get("load_errors_pct") is not None and r["load_errors_pct"] <= 1 \
+                and (r["cpu_m"] or 0) >= 20:
+            r["load_ok"] = "true"
         if not r.get("load_ok") and (r["connections"] or 0) > 0 and r["cpu_m"] is not None and r["cpu_m"] < 20:
             r["load_ok"] = "false"
     failed_loads = [r for r in rows if r.get("load_ok") == "false"]
@@ -306,13 +318,10 @@ def main(path):
             f_al = fit([r["pods"] for r in sub], [r["allocated_mi"] for r in sub])
             if f_ws:
                 kib = f_ws[1] * 1024
-                found[f"{exp}_kib"] = kib
+                found["per_endpoint_mi"] = max(found.get("per_endpoint_mi", 0), f_ws[1])
                 p(f"- Working set: **{kib:.1f} KiB per endpoint**, R² {f_ws[2]:.3f}")
                 share = 3 * f_ws[1] / per_cluster
                 p(f"- At 3 endpoints per Service, endpoints add {share:.0%} to the {per_cluster * 1024:.0f} KiB of a cluster")
-                if share > DEVIATION:
-                    notes.append(f"{name}: endpoints cost {kib:.1f} KiB each, {share:.0%} of a cluster at 3 per Service: "
-                                 "make endpoints per Service an input of the model.")
             if f_al:
                 p(f"- Heap in use: {f_al[1] * 1024:.1f} KiB per endpoint, R² {f_al[2]:.3f}")
             p("")
@@ -323,7 +332,8 @@ def main(path):
         p("Fresh pod per step, read under load. kConn comes from connections at about one request per "
           "second each, kReq from connections that each hold a request in flight for "
           "two seconds; requests in flight are fortio's rate times its mean latency. Steps whose load failed "
-          "(load_ok false: fortio aborted, more than 1% errors, or keep-alive broken) are shown and left out. "
+          "(load_ok false: fortio gave up, or more than 1% errors) are shown and left out. Sockets above the "
+          "connections mean the proxy closed connections and fortio reopened them. "
           "CPU on a shared CI runner is indicative only.\n")
         for exp, name in (("gateway-traffic", "Gateway"), ("waypoint-traffic", "Waypoint")):
             sub = by_exp[exp]
@@ -348,8 +358,8 @@ def main(path):
                 p(f"- {label}: {a:.1f} Mi + **{kc * 1024:.1f} KiB per connection** + "
                   f"**{kr * 1024:.1f} KiB per request in flight**, R² {r2:.3f}")
                 if col == "working_set_mi":
-                    found[f"{exp}_kconn_kib"] = kc * 1024
-                    found[f"{exp}_kreq_kib"] = kr * 1024
+                    found["kconn_mi"] = max(found.get("kconn_mi", 0), kc)
+                    found["kreq_mi"] = max(found.get("kreq_mi", 0), kr)
                     for reserve in TRAFFIC_RESERVES_MI:
                         if kc > 0:
                             p(f"- trafficReserveMi {reserve} covers {reserve / kc:,.0f} idle connections, "
@@ -387,10 +397,9 @@ def main(path):
                 p(f"- {label}: **{f[1] * 1000:.1f} Mi per 1000**, R² {f[2]:.3f}")
                 if exp == "ztunnel-mesh-pods":
                     found["ztunnel_base_mi"] = f[0]
-                    found["ztunnel_mi_per_1000_pods"] = f[1] * 1000
-        if "ztunnel_mi_per_1000_pods" in found:
-            notes.append(f"ztunnel grows by {found['ztunnel_mi_per_1000_pods']:.1f} Mi per 1000 pods of the cluster on "
-                         "every node: add the term to ztunnelMemPerNodeMi.")
+                    found["ztunnel_per_pod_mi"] = f[1]
+                if exp == "ztunnel-services":
+                    found["ztunnel_per_service_mi"] = f[1]
         conns = by_exp["ztunnel-connections"]
         if conns:
             p("\n### Per connection\n")
@@ -435,6 +444,7 @@ def main(path):
                     a, bs, bp, r2 = f
                     p(f"- {label}: {a:.0f} Mi + **{bs * 1024:.0f} KiB per Service** + **{bp * 1024:.0f} KiB per pod**, R² {r2:.3f}")
                     if col == "working_set_mi":
+                        found["istiod_base_mi"] = a
                         found["istiod_per_pod_mi"] = bp
                         found["istiod_per_service_mi"] = bs
             p("")
@@ -498,16 +508,19 @@ def main(path):
             continue
         got = found[key]
         dev = (got - model) / model
+        # Every coefficient is a memory cost, so a measured value below the
+        # model leaves it on the safe side; one above it needs an update, at
+        # once for the values set high on purpose.
         mark = ""
-        if key in CONSERVATIVE and dev > 0:
-            # Set high on purpose, so any measured value above it is unsafe.
+        if dev > (0 if key in CONSERVATIVE else DEVIATION):
             mark = " **update**"
-        elif abs(dev) > DEVIATION:
-            mark = " model on the safe side" if key in CONSERVATIVE and dev < 0 else " **update**"
+        elif dev < -DEVIATION:
+            mark = " model on the safe side"
         p(f"| {key} | {model} | {got:.4g} | {dev:+.0%}{mark} |")
     p("")
-    p(f"Deviations above {DEVIATION:.0%} are marked. Bases, clusters per Service and the margin are set high "
-      "on purpose, so a lower measured value leaves the model on the safe side and any higher one is marked. `clusters_per_service` is not measured here: "
+    p(f"Deviations above {DEVIATION:.0%} are marked: a measured value below the model leaves it on the safe side, "
+      "one above it needs an update. Bases, clusters per Service, the margin and the cost of a config object are set "
+      "high on purpose, so any measured value above them is marked. `clusters_per_service` is not measured here: "
       "synthetic Services have no subsets, so the measurements give clusters per port only.\n")
     if failed_loads:
         notes.append(f"{len(failed_loads)} load step(s) did not run as asked and are left out of the fits: "
