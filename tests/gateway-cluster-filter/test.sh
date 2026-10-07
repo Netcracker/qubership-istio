@@ -268,25 +268,45 @@ expect_traffic
 # 8. The workaround while istio/istio#TBD is open: pin the Service with a
 #    route. An HTTPRoute of the gateway for a host nobody uses, with
 #    "referenced" as its backend, makes it a route backend, which incremental
-#    pushes keep; a DENY policy on that host closes the route. The annotation
-#    is then removed (a full push): the pin alone keeps the cluster, through
-#    route changes as well.
+#    pushes keep; a DENY policy on that host closes the route.
+#    Each check has its control: the host answers 503 (a route to a Service
+#    without endpoints) before the policy and 403 after it; the annotation is
+#    removed and the pin alone keeps the cluster, also through a route change
+#    (the one that loses it in step 6); deleting the pin then removes it.
 # ---------------------------------------------------------------------------
+
+# wait_status <host> <code>
+wait_status() {
+  local code=""
+  for i in $(seq 1 24); do
+    code=$(gw_status "$1" /)
+    [ "${code}" = "$2" ] && { ok "$1 answers $2"; return 0; }
+    log "waiting for $1 to answer $2: got ${code} (${i}/24)"
+    sleep 5
+  done
+  fail "$1: expected $2, got ${code}"
+}
+
 fixtures_apply \
   --set-string "httpRoute.name=pin-referenced,httpRoute.namespace=${NS}" \
   --set-string "httpRoute.gateway=${GW_NAME},httpRoute.gatewayNamespace=${ISTIO_NAMESPACE}" \
   --set-string "httpRoute.backend=referenced,httpRoute.hostname=${PIN_HOST}"
+# The route is live and open: "referenced" has no endpoints.
+wait_status "${PIN_HOST}" 503
+
 fixtures_apply --set-string \
   "denyHost.name=${DENY_NAME},denyHost.namespace=${ISTIO_NAMESPACE},denyHost.gateway=${GW_NAME},denyHost.host=${PIN_HOST}"
-kubectl annotate envoyfilter "${EF_NAME}" -n "${ISTIO_NAMESPACE}" "envoyfilter.istio.io/referenced-services-"
+wait_status "${PIN_HOST}" 403
 
-# The cluster must hold after the full push of the annotation change: read it
-# for half a minute rather than once.
+# Without the annotation (a full push) only the pin references the Service.
+# Read the cluster for half a minute rather than once.
+kubectl annotate envoyfilter "${EF_NAME}" -n "${ISTIO_NAMESPACE}" "envoyfilter.istio.io/referenced-services-"
 for _ in $(seq 1 6); do
   expect_cluster present "$(cluster_of referenced)"
   sleep 5
 done
 
+# The route change of step 6, which loses an annotated cluster.
 apply_route late late /late
 wait_cluster present "$(cluster_of late)"
 expect_cluster present "$(cluster_of referenced)"
@@ -296,11 +316,8 @@ expect_cluster present "$(cluster_of referenced)"
 expect_cluster absent "$(cluster_of unrouted)"
 expect_traffic
 
-for i in $(seq 1 12); do
-  code=$(gw_status "${PIN_HOST}" /)
-  [ "${code}" = "403" ] && break
-  log "waiting for the DENY policy on ${PIN_HOST}: got ${code} (${i}/12)"
-  sleep 5
-done
-[ "${code}" = "403" ] || fail "${PIN_HOST}: expected 403 from the DENY policy, got ${code}"
-ok "the pinning route is closed: ${PIN_HOST} answers 403"
+# Control: without the pin the cluster goes.
+kubectl delete httproute pin-referenced -n "${NS}"
+wait_cluster absent "$(cluster_of referenced)"
+expect_cluster present "$(cluster_of routed)"
+expect_traffic
