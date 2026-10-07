@@ -97,4 +97,5 @@ workloadEntries: {}
 # with a route that exists only to keep a Service's cluster on the gateway
 # (pinned under PILOT_FILTER_GATEWAY_CLUSTER_CONFIG), nobody can use that route.
 #   name, namespace, gateway, host (required)
+#   port: the gateway's HTTP listener port (default 80)
 denyHost: {}

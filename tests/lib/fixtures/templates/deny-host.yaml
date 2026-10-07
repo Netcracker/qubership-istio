@@ -15,4 +15,8 @@ spec:
     - operation:
         hosts:
         - {{ required "denyHost.host is required" .host | quote }}
+        # Only the HTTP listener: a DENY rule on HTTP attributes alone would
+        # deny every TCP listener of the gateway.
+        ports:
+        - {{ .port | default 80 | quote }}
 {{- end }}
