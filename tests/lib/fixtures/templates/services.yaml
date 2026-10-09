@@ -1,0 +1,24 @@
+{{- with .Values.services }}
+{{- $namespace := required "services.namespace is required" .namespace }}
+{{- $prefix := required "services.prefix is required" .prefix }}
+{{- $from := int (required "services.from is required" .from) }}
+{{- $to := int (required "services.to is required" .to) }}
+{{- $ports := int (.ports | default 1) }}
+{{- range $i := untilStep $from (int (add $to 1)) 1 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $prefix }}-{{ $i }}
+  namespace: {{ $namespace }}
+  labels:
+    tests/services: {{ $prefix }}
+spec:
+  ports:
+  {{- range $j := until $ports }}
+  - name: http-{{ $j }}
+    port: {{ add 80 $j }}
+    targetPort: {{ add 8080 $j }}
+  {{- end }}
+{{- end }}
+{{- end }}

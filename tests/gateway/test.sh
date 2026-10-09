@@ -7,7 +7,7 @@ BACKEND_NS=gateway-test-backend
 cleanup() {
   kubectl delete httproute backend-route -n "${BACKEND_NS}" --ignore-not-found
   kubectl delete httproute -n "${BACKEND_NS}" --all --ignore-not-found
-  kubectl delete gateway "${GW_NAME}" -n "${ISTIO_NAMESPACE}" --ignore-not-found
+  kubectl delete gateways.gateway.networking.k8s.io "${GW_NAME}" -n "${ISTIO_NAMESPACE}" --ignore-not-found
   kubectl delete namespace "${BACKEND_NS}" --ignore-not-found
 }
 trap cleanup EXIT
@@ -62,7 +62,7 @@ spec:
         from: All
 EOF
 
-kubectl wait gateway/"${GW_NAME}" -n "${ISTIO_NAMESPACE}" --for=condition=Programmed --timeout=120s
+kubectl wait gateways.gateway.networking.k8s.io/"${GW_NAME}" -n "${ISTIO_NAMESPACE}" --for=condition=Programmed --timeout=120s
 kubectl rollout status "deployment/${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" --timeout=120s
 
 # Deployment and Service must exist

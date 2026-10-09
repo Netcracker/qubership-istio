@@ -124,7 +124,7 @@ jobs:
           - name: functional
             ip_family: ipv4
             kind_config: tests/kind-ipv4.yaml
-            tests: gateway num-trusted-proxies rollout istiod-rbac node-inotify cni-exclude-namespaces patch-pss
+            tests: gateway gateway-cluster-filter num-trusted-proxies rollout istiod-rbac node-inotify cni-exclude-namespaces patch-pss
             require_dual_stack: "false"
     name: integration-test (${{ matrix.name }})
     steps:
@@ -200,7 +200,7 @@ jobs:
           echo "OK: cluster IP family matches '${{ matrix.ip_family }}'"
 
       - name: Install Gateway API CRDs
-        run: kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
+        run: kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.1/standard-install.yaml
 
       - name: Helm install qubership-istio
         run: |
