@@ -3,7 +3,7 @@ set -eux
 
 cleanup() {
   kubectl delete httproute httpbin -n default --ignore-not-found
-  kubectl delete gateway xff-test -n "${ISTIO_NAMESPACE}" --ignore-not-found
+  kubectl delete gateways.gateway.networking.k8s.io xff-test -n "${ISTIO_NAMESPACE}" --ignore-not-found
   kubectl delete service httpbin -n default --ignore-not-found
   kubectl delete deployment httpbin -n default --ignore-not-found
 }
@@ -62,7 +62,7 @@ EOF
 
 # --- 3. Wait for XFF test resources ---
 kubectl rollout status deployment/httpbin -n default --timeout=120s
-kubectl wait gateway/xff-test -n "${ISTIO_NAMESPACE}" --for=condition=Programmed --timeout=120s
+kubectl wait gateways.gateway.networking.k8s.io/xff-test -n "${ISTIO_NAMESPACE}" --for=condition=Programmed --timeout=120s
 kubectl rollout status deployment/xff-test-istio -n "${ISTIO_NAMESPACE}" --timeout=120s
 STATUS=""
 for i in $(seq 1 24); do

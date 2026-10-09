@@ -1,0 +1,39 @@
+{{- with .Values.clusterRefFilter }}
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: {{ required "clusterRefFilter.name is required" .name }}
+  namespace: {{ required "clusterRefFilter.namespace is required" .namespace }}
+  {{- with .referencedServices }}
+  annotations:
+    envoyfilter.istio.io/referenced-services: {{ . | quote }}
+  {{- end }}
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: {{ required "clusterRefFilter.gateway is required" .gateway }}
+  configPatches:
+  - applyTo: HTTP_FILTER
+    match:
+      context: GATEWAY
+      listener:
+        filterChain:
+          filter:
+            name: envoy.filters.network.http_connection_manager
+            subFilter:
+              name: envoy.filters.http.router
+    patch:
+      operation: INSERT_BEFORE
+      value:
+        name: envoy.filters.http.ext_proc
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+          failure_mode_allow: true
+          processing_mode:
+            request_header_mode: SKIP
+            response_header_mode: SKIP
+          grpc_service:
+            envoy_grpc:
+              cluster_name: {{ required "clusterRefFilter.cluster is required" .cluster | quote }}
+{{- end }}

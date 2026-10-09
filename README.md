@@ -51,6 +51,7 @@ Restart existing workloads after labeling.
 | `MONITORING_ENABLED` | `true` | Deploy ServiceMonitor, PodMonitor, GrafanaDashboards |
 | `ENABLE_PRIVILEGED_PSS` | `true` | Pre-install hook Job labels the release namespace `pod-security.kubernetes.io/enforce=privileged` (needed on Pod-Security-Admission clusters) |
 | `monitoring.scrapeInterval` | `15s` | Prometheus scrape interval |
+| `istiod.env.PILOT_FILTER_GATEWAY_CLUSTER_CONFIG` | `"false"` | `"true"` sends each gateway only the Envoy clusters of the Services it references, instead of every Service in the cluster, so gateway memory stops growing with the cluster. Keep it off while an EnvoyFilter on a gateway calls a Service by cluster name and no route of that gateway points at the Service, see [Gateway cluster filtering](docs/public/installation.md#gateway-cluster-filtering) |
 | `istiod.*`, `ztunnel.*`, `cni.*` | see `values.yaml` | Pass any upstream Istio values under the subchart key |
 
 > When this chart is used as a sub-dependency of a parent chart, prefix all values with `qubership-istio.`
@@ -73,7 +74,7 @@ A scratch Docker image (`qubership-istio-transfer`) is built and pushed to `ghcr
 - [Namespace Enrollment](docs/public/namespace-enrollment.md) — how to enroll namespaces into the ambient mesh
 - [Red Hat OpenShift Service Mesh 3 in ambient mode](docs/public/openshift-istio.md) — install the mesh from the Red Hat operator instead of this distribution
 - [Troubleshooting](docs/public/troubleshooting.md) — pods that do not start with `istio-cni` `Unauthorized`, a hanging pre-install hook, and other problems after Istio is removed the wrong way
-- [Hardware sizing model](docs/internal/hardware-sizing-model.md) — capacity planning formulas for ztunnel, istiod, waypoint, and CNI
+- [Hardware sizing model](docs/internal/hardware-sizing-model.md) — capacity planning formulas for ztunnel, istiod, gateways, waypoints, and CNI
 - [Contributing](CONTRIBUTING.md)
 - [Security](SECURITY.md)
 - [Code of Conduct](CODE-OF-CONDUCT.md)

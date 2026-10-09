@@ -42,7 +42,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib/gateway.sh"
 
 cleanup() {
   kubectl delete httproute "${BACKEND_NAME}" -n default --ignore-not-found
-  kubectl delete gateway "${GW_NAME}" -n "${ISTIO_NAMESPACE}" --ignore-not-found
+  kubectl delete gateways.gateway.networking.k8s.io "${GW_NAME}" -n "${ISTIO_NAMESPACE}" --ignore-not-found
   kubectl delete service "${BACKEND_NAME}" -n default --ignore-not-found
   kubectl delete deployment "${BACKEND_NAME}" -n default --ignore-not-found
   kubectl delete pod "${CLIENT_POD}" -n default --ignore-not-found
@@ -54,7 +54,7 @@ trap cleanup EXIT
 # =========================== gateway helpers ===============================
 dump_gw_diag() {
   echo "===== gateway diagnostics ====="
-  kubectl get gateway "${GW_NAME}" -n "${ISTIO_NAMESPACE}" -o yaml || true
+  kubectl get gateways.gateway.networking.k8s.io "${GW_NAME}" -n "${ISTIO_NAMESPACE}" -o yaml || true
   kubectl get deploy,po,svc,endpointslice -n "${ISTIO_NAMESPACE}" \
     -l "gateway.networking.k8s.io/gateway-name=${GW_NAME}" -o wide || true
   kubectl describe pod -n "${ISTIO_NAMESPACE}" \
@@ -92,14 +92,14 @@ EOF
     dump_gw_diag
     fail "gateway ${GW_NAME} Deployment did not become Ready"
   fi
-  if ! kubectl wait gateway/"${GW_NAME}" -n "${ISTIO_NAMESPACE}" --for=condition=Programmed --timeout=120s; then
+  if ! kubectl wait gateways.gateway.networking.k8s.io/"${GW_NAME}" -n "${ISTIO_NAMESPACE}" --for=condition=Programmed --timeout=120s; then
     dump_gw_diag
     fail "gateway ${GW_NAME} not Programmed"
   fi
 }
 
 recreate_gateway() {
-  kubectl delete gateway "${GW_NAME}" -n "${ISTIO_NAMESPACE}" --ignore-not-found
+  kubectl delete gateways.gateway.networking.k8s.io "${GW_NAME}" -n "${ISTIO_NAMESPACE}" --ignore-not-found
   for i in $(seq 1 12); do
     kubectl get deployment "${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" 2>/dev/null || break
     echo "Waiting for old gateway Deployment to be garbage collected (attempt ${i}/12)..."
