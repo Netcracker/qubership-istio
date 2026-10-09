@@ -44,7 +44,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib/gateway.sh"
 
 cleanup() {
   kubectl delete httproute "${BACKEND_NAME}" -n default --ignore-not-found
-  kubectl delete gateway "${GW_NAME}" -n "${ISTIO_NAMESPACE}" --ignore-not-found
+  kubectl delete gateways.gateway.networking.k8s.io "${GW_NAME}" -n "${ISTIO_NAMESPACE}" --ignore-not-found
   kubectl delete service "${BACKEND_NAME}" -n default --ignore-not-found
   kubectl delete deployment "${BACKEND_NAME}" -n default --ignore-not-found
   kubectl delete pod "${CLIENT_POD}" -n default --ignore-not-found
@@ -70,7 +70,7 @@ spec:
       namespaces:
         from: All
 EOF
-  kubectl wait gateway/"${GW_NAME}" -n "${ISTIO_NAMESPACE}" --for=condition=Programmed --timeout=120s
+  kubectl wait gateways.gateway.networking.k8s.io/"${GW_NAME}" -n "${ISTIO_NAMESPACE}" --for=condition=Programmed --timeout=120s
   kubectl rollout status "deployment/${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" --timeout=120s
 }
 

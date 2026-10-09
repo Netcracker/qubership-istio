@@ -1,0 +1,22 @@
+{{- with .Values.denyHost }}
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ required "denyHost.name is required" .name }}
+  namespace: {{ required "denyHost.namespace is required" .namespace }}
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: {{ required "denyHost.gateway is required" .gateway }}
+  action: DENY
+  rules:
+  - to:
+    - operation:
+        hosts:
+        - {{ required "denyHost.host is required" .host | quote }}
+        # Only the HTTP listener: a DENY rule on HTTP attributes alone would
+        # deny every TCP listener of the gateway.
+        ports:
+        - {{ .port | default 80 | quote }}
+{{- end }}

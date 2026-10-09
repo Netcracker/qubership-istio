@@ -17,6 +17,7 @@
   - [General parameters](#general-parameters)
   - [Istio parameters](#istio-parameters)
     - [What the distribution presets](#what-the-distribution-presets)
+    - [Gateway cluster filtering](#gateway-cluster-filtering)
 - [Installation](#installation)
   - [Before you begin](#before-you-begin)
   - [On-prem](#on-prem)
@@ -266,10 +267,154 @@ The values below are set by this chart; everything else keeps the vanilla defaul
 | `istiod.meshConfig.defaultConfig.gatewayTopology.numTrustedProxies`                                | `1`                                                                    | How many proxies sit in front of a gateway, which decides the client address a gateway reads from `X-Forwarded-For`. Set it to the real number of hops, otherwise the address is wrong                                                                                                                                                                   |
 | `istiod.gatewayClasses.istio.service.spec.type`                                                    | `ClusterIP`                                                            | Gateways created from the `istio` class get no cloud load balancer. Set `LoadBalancer` where one is wanted                                                                                                                                                                                                                                               |
 | `istiod.env.ISTIO_DUAL_STACK` and `istiod.meshConfig.defaultConfig.proxyMetadata.ISTIO_DUAL_STACK` | `"false"`                                                              | Dual-stack support. Both have to be changed together: the mesh config carries the flag into gateway pods, and only a restarted istiod reconciles existing gateways with it                                                                                                                                                                               |
+| `istiod.env.PILOT_FILTER_GATEWAY_CLUSTER_CONFIG`                                                   | `"false"`                                                              | `"true"` sends each gateway only the Envoy clusters of the Services it references, so gateway memory no longer grows with the number of Services in the cluster. Keep it off while an EnvoyFilter on a gateway calls a Service by cluster name and no route of that gateway points at the Service, see [Gateway cluster filtering](#gateway-cluster-filtering) |
 | `ztunnel.meshConfig.defaultConfig.proxyMetadata`                                                   | `ISTIO_META_DNS_CAPTURE: "true"`, `ISTIO_META_ROUTER_MODE: "sni-dnat"` | Proxy metadata the chart sets for ztunnel                                                                                                                                                                                                                                                                                                                |
 | `cni.excludeNamespaces`                                                                            | `kube-system`, and the chart adds the release namespace                | The CNI plugin lets pods of these namespaces through without asking the Kubernetes API. The chart always adds the release namespace to the list, so the pre-install hook starts even on a node where a stopped agent with this list left the plugin behind, see [Troubleshooting](troubleshooting.md#installation-hangs-on-the-pre-install-hook). A list set in the values replaces `kube-system`, so keep it |
 | `seccompProfile.type` on `global.proxy`, `cni`, `istiod`, and `istiod.gateways`                    | `RuntimeDefault`                                                       | Keeps the istiod and gateway pods admissible under `restricted`. No effect on the admission of `istio-cni-node` or `ztunnel`, which need `privileged` regardless                                                                                                                                                                                         |
 | `resources` on `cni`, `istiod`, `ztunnel`                                                          | see [HWE](#hwe)                                                        | Requests and limits for the three components                                                                                                                                                                                                                                                                                                             |
+
+
+### Gateway cluster filtering
+By default istiod sends every gateway the Envoy cluster of every port of every Service in the cluster, whether its routes use it or not. Gateway memory then grows with the cluster: see [the hardware sizing model](../internal/hardware-sizing-model.md#5-gateway-sizing).
+
+With `istiod.env.PILOT_FILTER_GATEWAY_CLUSTER_CONFIG: "true"`, a gateway gets only the clusters of:
+
+- the backends of the routes attached to it,
+- the services of `meshConfig.extensionProviders`,
+- the JWKS hosts of the `RequestAuthentication` policies that apply to it,
+- the Services listed in the `envoyfilter.istio.io/referenced-services` annotation of the `EnvoyFilter`s that apply to it, but see [EnvoyFilters that name a cluster](#envoyfilters-that-name-a-cluster).
+
+Waypoints are not affected: they get only the Services bound to them either way. The flag applies to every gateway this istiod serves, and is experimental upstream.
+
+#### EnvoyFilters that name a cluster
+An `EnvoyFilter` that refers to an Envoy cluster by name, for example an HTTP filter that calls a service through `grpc_service.envoy_grpc.cluster_name`, works because istiod sends the gateway all clusters. No route of the gateway points at that Service, so with the flag on the cluster is no longer sent. Depending on the filter, Envoy either rejects the listener update, or accepts it and every call of the filter fails at request time; the filter's failure mode then decides whether requests pass without the filter or are rejected. The `EnvoyFilter` itself shows no error.
+
+If a route of one gateway already points at the same Service, that gateway still gets the cluster, and the problem shows only on the other gateways the `EnvoyFilter` targets.
+
+Upstream, the `envoyfilter.istio.io/referenced-services` annotation on the `EnvoyFilter` is meant to keep such a cluster. In Istio 1.30.4 it keeps it only until the next route change: a change to any `HTTPRoute` or `VirtualService` in the cluster sends the gateways an incremental update without the annotated Services, and the cluster stays missing until the next full update, such as an `EnvoyFilter` change or an istiod restart ([istio/istio#62067](https://github.com/istio/istio/issues/62067), fixed upstream, in no release yet).
+
+So while a gateway has such an `EnvoyFilter`, either keep the flag off and size the gateway memory for all Services in the cluster (see [the hardware sizing model](../internal/hardware-sizing-model.md#5-gateway-sizing)), or turn it on and [pin the Service with a route](#pinning-a-service-with-a-route). Add the annotation either way. It changes nothing while the flag is off or the Service is pinned, and once a release with the fix is in place the pins can go without touching the `EnvoyFilter`s.
+
+The annotation lists the Service the cluster belongs to as `<namespace>/<hostname>`, several separated by commas:
+
+```yaml
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: request-check
+  namespace: istio-gateways
+  annotations:
+    # The Service behind cluster_name below: <namespace>/<hostname>
+    envoyfilter.istio.io/referenced-services: checker/request-checker.checker.svc.cluster.local
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: public-gateway
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: private-gateway
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+              subFilter:
+                name: envoy.filters.http.router
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.ext_proc
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+            grpc_service:
+              envoy_grpc:
+                # outbound|<port>||<hostname>: a cluster istiod builds for the Service
+                cluster_name: outbound|9000||request-checker.checker.svc.cluster.local
+```
+
+The annotation has to be on the `EnvoyFilter` that applies to the gateway, through `targetRefs` or `workloadSelector`, and name the same Service as `cluster_name`. istiod adds the Service to those gateways only.
+
+Services in `meshConfig.extensionProviders` need no annotation: istiod adds them by itself.
+
+To find the `EnvoyFilter`s that name a cluster, before turning the flag on:
+
+```bash
+kubectl get envoyfilter -A -o yaml | grep -n -E 'cluster_name|cluster: |outbound\|'
+```
+
+Only a name of a cluster istiod builds for a Service, `outbound|<port>|<subset>|<hostname>`, is affected. A cluster that the `EnvoyFilter` adds itself (`applyTo: CLUSTER` with `operation: ADD`) is inserted into every update, full or incremental, and the flag does not filter it: such a filter needs neither the annotation nor a pin. Its connections do not go through the mesh, though: they carry no mTLS, and the target rejects them where a `PeerAuthentication` puts it in `STRICT` mode.
+
+To check a gateway once the flag is on, the cluster has to be in its config, also after a route change:
+
+```bash
+istioctl proxy-config cluster deploy/<gateway>-istio -n <gateway namespace> | grep '<hostname>'
+```
+
+#### Pinning a Service with a route
+A route backend is kept by every update, incremental ones included. A route that points at the Service therefore keeps its cluster on the gateway, and an `AuthorizationPolicy` that denies the route's host keeps anyone from calling the Service through it. One pin per Service, attached to every gateway the `EnvoyFilter` targets:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: pin-request-checker
+  namespace: checker
+spec:
+  parentRefs:
+    - name: public-gateway
+      namespace: istio-gateways
+    - name: private-gateway
+      namespace: istio-gateways
+  # A host nobody calls: .invalid is reserved and never resolves
+  hostnames:
+    - pin-request-checker.invalid
+  rules:
+    - backendRefs:
+        # The Service and the port of cluster_name: outbound|9000||request-checker.checker.svc.cluster.local
+        - name: request-checker
+          port: 9000
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: deny-pin-request-checker
+  namespace: istio-gateways
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: public-gateway
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: private-gateway
+  action: DENY
+  rules:
+    - to:
+        - operation:
+            hosts:
+              - pin-request-checker.invalid
+            # The ports of the gateways' HTTP and HTTPS listeners
+            ports:
+              - "80"
+              - "443"
+```
+
+- The route has to be accepted by every gateway in `parentRefs`. A listener takes routes only from the namespaces its `allowedRoutes` allows, by default its own: either allow the Service's namespace there, or put the route into the gateway's namespace and add a `ReferenceGrant` in the Service's namespace that lets `HTTPRoute`s from there refer to `Service`s.
+- A listener with a `hostname` accepts only routes whose host matches it. For such a listener use a host under its domain that nobody calls, for example `pin-request-checker.example.com` for `*.example.com`, and deny that host.
+- Without `ports` in the rule, a `DENY` rule on HTTP attributes alone denies all traffic of the gateway's TCP listeners, and istiod warns about it when the policy is applied. List the ports of the HTTP and HTTPS listeners, as in the `Gateway`'s `listeners[].port`.
+
+Check that the pin is in place: the route is accepted by each gateway, and the host answers `403`:
+
+```bash
+kubectl get httproute pin-request-checker -n checker -o jsonpath='{range .status.parents[*]}{.parentRef.name}: {.conditions[?(@.type=="Accepted")].status}{"\n"}{end}'
+curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: pin-request-checker.invalid' http://<gateway address>/
+```
+
+The integration test `tests/gateway-cluster-filter` checks this pin: with the annotation removed the cluster stays through route changes, and goes once the route is deleted.
 
 # Installation
 ## Before you begin
