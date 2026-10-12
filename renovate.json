@@ -5,7 +5,9 @@
   "reviewersFromCodeOwners": true,
 
   "helmv3": {
-    "fileMatch": ["helm-templates/qubership-istio/Chart\\.yaml$"]
+    "managerFilePatterns": [
+      "/helm-templates/qubership-istio/Chart\\.yaml$/"
+    ]
   },
 
   "packageRules": [
