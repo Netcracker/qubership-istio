@@ -234,18 +234,26 @@ expect_traffic
 
 # ---------------------------------------------------------------------------
 # 6. Changes while the flag is on: a new Service and its route add a cluster,
-#    deleting the route removes it.
-#    Known issue istio/istio#62067: a route change is an incremental push, which
-#    leaves out the Services of the annotation, so "referenced" is lost. When
-#    this step fails on "referenced", the fix has arrived: expect it present
-#    here, drop step 7, and update "Gateway cluster filtering" in
-#    docs/public/installation.md and the comment of the flag in values.yaml.
+#    deleting the route removes it. The route change is an incremental push,
+#    which drops the annotated cluster until a release with the fix of
+#    istio/istio#62067.
 # ---------------------------------------------------------------------------
 kubectl create service clusterip late --tcp=80:8080 -n "${NS}"
 apply_route late late /late
 
 wait_cluster present "$(cluster_of late)"
-wait_cluster absent "$(cluster_of referenced)"
+pod=$(gw_pod)
+for i in $(seq 1 24); do
+  proxy_has_cluster "${ISTIO_NAMESPACE}" "${pod}" "$(cluster_of referenced)" || break
+  log "waiting for the route change to drop $(cluster_of referenced) (${i}/24)"
+  sleep 5
+done
+if proxy_has_cluster "${ISTIO_NAMESPACE}" "${pod}" "$(cluster_of referenced)"; then
+  fail "$(cluster_of referenced) survived a route change: istio/istio#62067 is fixed in this Istio." \
+    "Expect the cluster present in step 6, drop steps 7 and 8, and remove the note" \
+    "\"Istio 1.30.5 and earlier\" in docs/public/installation.md."
+fi
+ok "$(cluster_of referenced) dropped by the route change (istio/istio#62067)"
 
 kubectl delete httproute late -n "${NS}"
 wait_cluster absent "$(cluster_of late)"

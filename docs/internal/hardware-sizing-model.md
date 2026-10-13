@@ -17,7 +17,7 @@ Cluster:
 - platformServices: Services of the cluster not counted in envs, in the mesh or not: istiod discovers every namespace, so they enter its memory, ztunnel's and, without the flag, every gateway. With `meshConfig.discoverySelectors` set, only the namespaces it selects count
 - platformPods: pods of the cluster not counted in envs, on the same terms
 - platformServicePorts, optional: ports of those Services together. Without it the model gives them the portsPerService of the environment
-- filterGatewayClusters: whether istiod runs with `PILOT_FILTER_GATEWAY_CLUSTER_CONFIG=true`. A gateway whose EnvoyFilter names a cluster cannot use it yet (see section 5)
+- filterGatewayClusters: whether istiod runs with `PILOT_FILTER_GATEWAY_CLUSTER_CONFIG=true`
 - egressGateway: whether the environments have an egress gateway; `false` with `SKIP_EGRESS_GATEWAY_CREATION: true`
 
 One environment; where environments differ, the largest one:
@@ -26,7 +26,7 @@ One environment; where environments differ, the largest one:
 - portsPerService: average ports per Service of the environment, in place of servicePortsPerEnv when the ports are not counted
 - podsPerEnv: pods at peak, every replica and the HPA's maximum included: they are the endpoints of its Services and the workloads ztunnel and istiod keep
 - configObjectsPerEnv: Istio and Gateway API objects of the namespace: routes, AuthorizationPolicies, DestinationRules, ServiceEntries, EnvoyFilters
-- referencedServices[public], referencedServices[private], referencedServices[egress]: distinct Services the routes attached to each gateway point at. With the flag their ports give the gateway's Envoy clusters, so the gateways differ: egress, with only its fallback route, references one Service, and egress < private < public
+- referencedServices[public], referencedServices[private], referencedServices[egress]: distinct Services the routes attached to each gateway point at, and those in the `envoyfilter.istio.io/referenced-services` annotation of its EnvoyFilters. With the flag their ports give the gateway's Envoy clusters, so the gateways differ: egress, with only its fallback route, references one Service, and egress < private < public
 - referencedEndpoints[gateway], optional: endpoints of those Services at peak. Without it the model gives them the average number of pods per Service of the environment
 
 ### 1.2 Profile values
@@ -59,13 +59,19 @@ kubectl get deploy,statefulset,hpa -n $NS -o json | jq '
 # configObjectsPerEnv
 kubectl get httproutes,grpcroutes,authorizationpolicies,destinationrules,serviceentries,envoyfilters,peerauthentications -n $NS -o name | wc -l
 
-# referencedServices of each gateway: routes from any namespace attached to it
+# referencedServices of each gateway: backends of the routes from any namespace attached to it,
+# and the referenced-services annotation of the EnvoyFilters that target it
 for GW in public-gateway private-gateway egress-gateway; do
-  kubectl get httproutes,grpcroutes -A -o json | jq --arg ns $NS --arg gw $GW '
-    [.items[] | .metadata.namespace as $rns
-     | select(any(.spec.parentRefs[]; .name == $gw and (.namespace // $rns) == $ns))
-     | .spec.rules[]?.backendRefs[]? | select((.kind // "Service") == "Service")
-     | "\(.namespace // $rns)/\(.name)"] | unique | length'
+  { kubectl get httproutes,grpcroutes -A -o json | jq -r --arg ns $NS --arg gw $GW '
+      .items[] | .metadata.namespace as $rns
+      | select(any(.spec.parentRefs[]; .name == $gw and (.namespace // $rns) == $ns))
+      | .spec.rules[]?.backendRefs[]? | select((.kind // "Service") == "Service")
+      | "\(.namespace // $rns)/\(.name)"'
+    kubectl get envoyfilters -n $NS -o json | jq -r --arg gw $GW '
+      .items[] | select(any(.spec.targetRefs[]?; .name == $gw))
+      | .metadata.annotations["envoyfilter.istio.io/referenced-services"] // empty
+      | split(",")[] | split("/") | "\(.[0])/\(.[1] | split(".")[0])"'
+  } | sort -u | wc -l
 done
 
 # platformServices, platformPods: everything in the cluster outside the environment namespaces
@@ -192,7 +198,7 @@ idleMemMi = base + 0.092 * clusters + 0.018 * hosts
 ```
 - An endpoint sits in every cluster of its Service, one per port and per subset: a gateway holds 1.2 hosts per endpoint and port of its Service, a waypoint 1.6
 - 0.092 Mi (94 KiB) per Envoy cluster, pod working set, Istio 1.30. Measured on kind with Istio 1.30.4: 0.088 Mi per cluster on a gateway pod that received its config at start, 1 worker. A pod that grew into the same config can hold less, but a restart brings it back to the higher value, so the model follows the restarted pod. On a real EKS cluster a gateway restarted at each step added 106 Mi per 1000 Services of one port with two ambient endpoints each (WorkloadEntries), against 128 Mi in the model; at 2082 Services (2124 clusters, 4102 endpoints) the gateways held 218–258 Mi against 319 Mi in the model
-- Envoy does not give memory back when its config shrinks: on EKS, gateways that had held 2000 more Services stayed at 110 Mi after those were deleted, against 35 Mi before. Size for the largest config a gateway will have held, not the current one
+- Envoy gives back only part of its memory when its config shrinks: on EKS, gateways that held 218–258 Mi at 2082 Services went to 110 Mi after 2000 of them were deleted, against 35 Mi before they were added; on another cluster running gateways went from 200–225 Mi to 100–106 Mi when the flag was turned on, while a new pod takes 51–55 Mi. A restart gives back the rest. Size for the largest config a gateway will have held since its last restart, not the current one
 - base = 50 Mi for a gateway; 29–32 Mi measured at idle on kind
 - base = 75 Mi for a waypoint: an idle waypoint holds more than its clusters account for, and that part varies between clusters, so the base is set high; 33–34 Mi measured on kind
 - Includes pilot-agent, which runs in the same `istio-proxy` container
@@ -241,7 +247,7 @@ endpointsInScope = filterGatewayClusters ? referencedEndpoints[gateway]         
 ```
 - Without the flag (the istiod default) a gateway gets the clusters of all Services in all namespaces, whether its routes use them or not. Its memory grows with the cluster, not with what it serves
 - With the flag, only Services the gateway references, with all their ports. Egress with only its fallback route references one Service
-- An EnvoyFilter that names a cluster directly (`envoy_grpc.cluster_name: outbound|...`) of a Service no route of the gateway points at rules the flag out until a release carries the fix of [istio/istio#62067](https://github.com/istio/istio/issues/62067): in Istio 1.30.4 the `envoyfilter.istio.io/referenced-services` annotation keeps the cluster only until the next route change. Size such gateways without the flag: see [Gateway cluster filtering](../public/installation.md#gateway-cluster-filtering)
+- An EnvoyFilter that names a cluster directly (`envoy_grpc.cluster_name: outbound|...`) of a Service no route of the gateway points at keeps it through the `envoyfilter.istio.io/referenced-services` annotation, and that Service counts as referenced: see [Gateway cluster filtering](../public/installation.md#gateway-cluster-filtering)
 
 ### Memory
 
@@ -481,7 +487,6 @@ The memory coefficients of Envoy, ztunnel and istiod are taken on Istio 1.30.4 w
 - Always validate with load testing
 - Recommended safety margin: **+30–50%** on top of every result of the model. The factors 1.5 of ztunnel, 2 of istiod and 1.4 of gateways and waypoints are not a margin but the peak of each component over its steady state, see sections 3, 4.4 and 7
 - Inputs left uncounted fall back to averages of the environment: without servicePortsPerEnv the ports are portsPerService times the Services, without platformServicePorts the platform Services get the same portsPerService, and without referencedEndpoints a referenced Service gets the average pods per Service. Counted values replace them where the averages differ, for example a gateway that routes to the Services with the most replicas
-- The flag cannot be used yet where a gateway's EnvoyFilter names a cluster of a Service no route points at: the annotation-referenced cluster is lost on route changes in Istio 1.30.4 ([istio/istio#62067](https://github.com/istio/istio/issues/62067), fixed upstream, in no release yet). The flag is istiod-wide, so all gateways are then sized without it
 
 ## 14. Istio Ambient Mesh Examples - Prod and Dev Profiles
 
@@ -605,5 +610,3 @@ The dev profiles set 200Mi per gateway. Without the flag idle memory reaches it 
 | `PRIVATE_GW_MEMORY_LIMIT` | 512Mi | 288Mi | 1344Mi | 160Mi |
 | `EGRESS_GW_MEMORY_LIMIT` | 512Mi | 224Mi | 1344Mi | 128Mi |
 | `WAYPOINT_MEMORY_LIMIT` | 480Mi | 480Mi | 288Mi | 288Mi |
-
-If the gateways carry an EnvoyFilter that names a cluster (section 5), the "flag on" columns wait for a release with the fix of istio/istio#62067: use the "flag off" columns until then.
