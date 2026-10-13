@@ -3,13 +3,20 @@
   "assignAutomerge": false,
   "assigneesFromCodeOwners": true,
   "reviewersFromCodeOwners": true,
-
   "helmv3": {
-    "managerFilePatterns": [
-      "/helm-templates/qubership-istio/Chart\\.yaml$/"
-    ]
+    "managerFilePatterns": ["/helm-templates/qubership-istio/Chart\\.yaml$/"]
   },
-
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Keep links to Istio sources in the docs on the shipped chart version",
+      "managerFilePatterns": ["/^docs/.+\\.md$/"],
+      "matchStrings": ["https://github\\.com/istio/istio/blob/(?<currentValue>\\d+\\.\\d+\\.\\d+)/"],
+      "depNameTemplate": "istiod",
+      "datasourceTemplate": "helm",
+      "registryUrlTemplate": "https://istio-release.storage.googleapis.com/charts"
+    }
+  ],
   "packageRules": [
     {
       "matchDatasources": ["helm"],

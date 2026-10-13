@@ -24,9 +24,9 @@ RENDER_DIR="$(mktemp -d)"
 
 # Parks the agents with a nodeSelector that no node matches. An agent that stops
 # while its DaemonSet exists leaves the plugin behind unless the DaemonSet's node
-# affinity no longer matches the node: ShouldStopCleanup checks node affinity and
-# ignores nodeSelector, see
-# https://github.com/istio/istio/blob/1.30.4/cni/pkg/nodeagent/server.go#L155
+# affinity no longer matches the node: the cleanup check in the agent
+# (ShouldStopCleanup in istio cni/pkg/nodeagent/server.go) reads node affinity and ignores
+# nodeSelector.
 # Parking by node affinity would make the agents remove the plugin, and the
 # stale-plugin checks below would prove nothing.
 park_agents() {
