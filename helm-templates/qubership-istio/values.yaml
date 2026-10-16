@@ -137,7 +137,7 @@ istiod:
     # envoyfilter.istio.io/referenced-services annotation of its EnvoyFilters.
     # Experimental upstream; restarts istiod. See "Gateway cluster filtering" in
     # docs/public/installation.md.
-    PILOT_FILTER_GATEWAY_CLUSTER_CONFIG: "false"
+    PILOT_FILTER_GATEWAY_CLUSTER_CONFIG: "true"
 
   meshConfig:
     accessLogFile: "/dev/stdout"
