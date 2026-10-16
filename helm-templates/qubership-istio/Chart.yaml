@@ -6,14 +6,14 @@ type: application
 version: 0.0.1
 dependencies:
   - name: base
-    version: "1.30.5"
+    version: "1.30.6"
     repository: "https://blob.istio.io/istio-release/charts"
   - name: cni
-    version: "1.30.5"
+    version: "1.30.6"
     repository: "https://blob.istio.io/istio-release/charts"
   - name: istiod
-    version: "1.30.5"
+    version: "1.30.6"
     repository: "https://blob.istio.io/istio-release/charts"
   - name: ztunnel
-    version: "1.30.5"
+    version: "1.30.6"
     repository: "https://blob.istio.io/istio-release/charts"

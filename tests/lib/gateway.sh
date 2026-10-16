@@ -8,7 +8,7 @@
 #
 #   GW_NAME            name of the Gateway resource
 #   BACKEND_NAME       name of the backend Deployment/Service + HTTPRoute (in ns default)
-#   DNS_PROBE_NAME     name of the DNS-probe ServiceEntry (in ns default)
+#   DNS_PROBE_NAME     name of the DNS-probe ServiceEntry and its HTTPRoute (in ns default)
 #   DNS_PROBE_HOST     hostname the ServiceEntry resolves
 #   DNS_PROBE_CLUSTER  Envoy cluster name for the probe (outbound|80||${DNS_PROBE_HOST})
 #   CLIENT_POD         name of the in-cluster curl client pod (in ns default)
@@ -20,8 +20,8 @@
 # ---------------------------------------------------------------------------
 
 gw_pod() {
-  kubectl get pod -n "${ISTIO_NAMESPACE}" -l "gateway.networking.k8s.io/gateway-name=${GW_NAME}" \
-    -o jsonpath='{.items[0].metadata.name}'
+  kubectl get pod -n "${ISTIO_NAMESPACE}" -l "gateway.networking.k8s.io/gateway-name=${GW_NAME}" -o json \
+    | jq -r '[.items[] | select(.metadata.deletionTimestamp == null)][0].metadata.name // empty'
 }
 
 apply_httproute() {
@@ -70,6 +70,25 @@ spec:
     name: http
     protocol: HTTP
   resolution: DNS
+EOF
+  kubectl apply -f - <<EOF
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ${DNS_PROBE_NAME}
+  namespace: default
+spec:
+  parentRefs:
+  - name: ${GW_NAME}
+    namespace: ${ISTIO_NAMESPACE}
+  hostnames:
+  - ${DNS_PROBE_HOST}
+  rules:
+  - backendRefs:
+    - group: networking.istio.io
+      kind: Hostname
+      name: ${DNS_PROBE_HOST}
+      port: 80
 EOF
 }
 

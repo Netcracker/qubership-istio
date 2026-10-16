@@ -1,0 +1,25 @@
+{{- with .Values.gateway }}
+{{- $name := required "gateway.name is required" .name }}
+{{- $namespace := required "gateway.namespace is required" .namespace }}
+{{ include "fixtures.proxyOptions" (dict "name" $name "namespace" $namespace "cpuLimit" (.cpuLimit | default "1") "memoryLimit" (.memoryLimit | default "1Gi")) }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: {{ $name }}
+  namespace: {{ $namespace }}
+spec:
+  gatewayClassName: istio
+  infrastructure:
+    parametersRef:
+      group: ""
+      kind: ConfigMap
+      name: {{ $name }}-options
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces:
+        from: All
+{{- end }}
