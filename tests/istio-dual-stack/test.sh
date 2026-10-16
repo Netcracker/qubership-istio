@@ -245,8 +245,13 @@ kubectl rollout status daemonset/ztunnel -n "${ISTIO_NAMESPACE}" --timeout=120s
 # dns_lookup_family is the behavioural signal that the gateway actually went
 # dual (V4_ONLY -> a dual-capable family), so we key the fallback off it.
 kubectl rollout status "deployment/${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" --timeout=240s || true
-GW_POD=$(gw_pod)
-DLF=$(gw_dns_lookup_family "${GW_POD}")
+for i in $(seq 1 24); do
+  GW_POD=$(gw_pod)
+  DLF=$(gw_dns_lookup_family "${GW_POD}")
+  is_dual_capable_dns_family "${DLF}" && break
+  echo "Waiting for the gateway to go dual-stack (dns_lookup_family=${DLF:-<none>}, attempt ${i}/24)..."
+  sleep 5
+done
 if ! is_dual_capable_dns_family "${DLF}"; then
   echo "Gateway still single-stack (dns_lookup_family=${DLF:-<none>}) — recreating Gateway..."
   recreate_gateway

@@ -20,8 +20,8 @@
 # ---------------------------------------------------------------------------
 
 gw_pod() {
-  kubectl get pod -n "${ISTIO_NAMESPACE}" -l "gateway.networking.k8s.io/gateway-name=${GW_NAME}" \
-    -o jsonpath='{.items[0].metadata.name}'
+  kubectl get pod -n "${ISTIO_NAMESPACE}" -l "gateway.networking.k8s.io/gateway-name=${GW_NAME}" -o json \
+    | jq -r '[.items[] | select(.metadata.deletionTimestamp == null)][0].metadata.name // empty'
 }
 
 apply_httproute() {
