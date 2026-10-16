@@ -1,6 +1,6 @@
 # Istio Ambient Mesh Hardware Sizing Model
 
-Units: memory is in Mi, CPU in vCPU throughout. The coefficients of Envoy, ztunnel and istiod are calibrated on Istio 1.30.4, see [12. Calibration](#12-calibration); the CNI figures follow the CNI providers' guidance.
+Units: memory is in Mi, CPU in vCPU throughout. The coefficients of Envoy, ztunnel and istiod are calibrated on Istio 1.30.4, see [12. Calibration](#12-calibration); `istio-cni` is sized from the requests of the chart.
 
 ## 1. Input Parameters
 
@@ -17,6 +17,7 @@ Cluster:
 - platformServices: Services of the cluster not counted in envs, in the mesh or not: istiod discovers every namespace, so they enter its memory, ztunnel's and, without the flag, every gateway. With `meshConfig.discoverySelectors` set, only the namespaces it selects count
 - platformPods: pods of the cluster not counted in envs, on the same terms
 - platformServicePorts, optional: ports of those Services together. Without it the model gives them the portsPerService of the environment
+- platformConfigObjects: Istio and Gateway API objects outside the environments, of the kinds configObjectsPerEnv counts
 - filterGatewayClusters: whether istiod runs with `PILOT_FILTER_GATEWAY_CLUSTER_CONFIG=true`
 - egressGateway: whether the environments have an egress gateway; `false` with `SKIP_EGRESS_GATEWAY_CREATION: true`
 
@@ -24,9 +25,9 @@ One environment; where environments differ, the largest one:
 - servicesPerEnv: Services of the namespace
 - servicePortsPerEnv: ports of all those Services together; they give the Envoy clusters of the waypoint and, with the flag off, of every gateway in the cluster. Either counted, or given as portsPerService
 - portsPerService: average ports per Service of the environment, in place of servicePortsPerEnv when the ports are not counted
-- podsPerEnv: pods at peak, every replica and the HPA's maximum included: they are the endpoints of its Services and the workloads ztunnel and istiod keep
-- configObjectsPerEnv: Istio and Gateway API objects of the namespace: routes, AuthorizationPolicies, DestinationRules, ServiceEntries, EnvoyFilters
-- referencedServices[public], referencedServices[private], referencedServices[egress]: distinct Services and ServiceEntry hosts the routes attached to each gateway point at, and those in the `envoyfilter.istio.io/referenced-services` annotation of its EnvoyFilters. With the flag their ports give the gateway's Envoy clusters, so the gateways differ: egress, with only its fallback route, references one Service, and egress < private < public
+- podsPerEnv: pods at peak, every replica and the HPA's maximum included, the gateway and waypoint pods among them: they are the endpoints of its Services and the workloads ztunnel and istiod keep. The per-pod traffic of section 1.2 is an average over all of them
+- configObjectsPerEnv: Istio and Gateway API objects of the namespace: HTTPRoutes, GRPCRoutes, VirtualServices, DestinationRules, ServiceEntries, AuthorizationPolicies, PeerAuthentications, RequestAuthentications, EnvoyFilters
+- referencedServices[public], referencedServices[private], referencedServices[egress]: distinct Services and ServiceEntry hosts the routes attached to each gateway point at, those in the `envoyfilter.istio.io/referenced-services` annotation of its EnvoyFilters, the services of `meshConfig.extensionProviders`, and the JWKS hosts of the RequestAuthentications that apply to it. With the flag their ports give the gateway's Envoy clusters, so the gateways differ: egress, with only its fallback route, references one Service, and egress < private < public
 - referencedEndpoints[gateway], optional: endpoints of those Services at peak. Without it the model gives them the average number of pods per Service of the environment
 
 ### 1.2 Profile values
@@ -36,9 +37,9 @@ One environment; where environments differ, the largest one:
 | proxyReplicas | 2 | 1 | replicas of each gateway and waypoint (`REPLICAS` of the profile) |
 | proxyHpaMaxReplicas | 5 | 5 | `HPA_MAX_REPLICAS` of the profile |
 | trafficReserveMi | 128 | 32 | memory per proxy pod for its connections and requests in flight, see [4.3](#43-traffic) |
-| connectionsPerPod | 20 | 5 | open connections of an application pod |
-| rpsPerPod | 25 | 1 | peak requests per second of an application pod |
-| mbpsPerPod | 12.5 | 0.5 | peak traffic of an application pod, request and response bodies together |
+| connectionsPerPod | 20 | 5 | open connections a pod opens to others; its inbound ones are counted at their clients |
+| rpsPerPod | 25 | 1 | peak requests per second a pod sends |
+| mbpsPerPod | 12.5 | 0.5 | peak traffic of the requests a pod sends, request and response bodies together |
 | newConnectionShare | 0.1 | 0.1 | share of requests that open a new connection; keep-alive carries the rest |
 | l7TrafficRatio | 0.3 | 0.3 | share of the traffic that goes through waypoints |
 | gatewayTrafficShare | public 0.2, private 0.1, egress 0.01 | the same | share of an environment's requests and traffic through each of its gateways |
@@ -56,12 +57,14 @@ kubectl get deploy,statefulset,hpa -n $NS -o json | jq '
   ([.items[] | select(.kind == "HorizontalPodAutoscaler") | {(.spec.scaleTargetRef.name): .spec.maxReplicas}] | add // {}) as $hpa
   | [.items[] | select(.kind != "HorizontalPodAutoscaler") | $hpa[.metadata.name] // .spec.replicas // 1] | add'
 
-# configObjectsPerEnv
-kubectl get httproutes,grpcroutes,authorizationpolicies,destinationrules,serviceentries,envoyfilters,peerauthentications -n $NS -o name | wc -l
+# configObjectsPerEnv; platformConfigObjects: the same with -A, less the environment namespaces
+KINDS=httproutes,grpcroutes,virtualservices,destinationrules,serviceentries,authorizationpolicies,peerauthentications,requestauthentications,envoyfilters
+kubectl get $KINDS -n $NS -o name | wc -l
 
 # referencedServices of each gateway, as hostnames: the backends of the routes from any namespace attached to it,
 # Services and ServiceEntry hosts, and the referenced-services annotation of the EnvoyFilters in its namespace and
-# in the root namespace. An EnvoyFilter without targetRefs is counted for every gateway: check its workloadSelector
+# in the root namespace. An EnvoyFilter without targetRefs is counted for every gateway: check its workloadSelector.
+# Add the services of meshConfig.extensionProviders and the JWKS hosts of RequestAuthentications by hand
 ROOT_NS=istio-system
 for GW in public-gateway private-gateway egress-gateway; do
   { kubectl get httproutes,grpcroutes -A -o json | jq -r --arg ns $NS --arg gw $GW '
@@ -105,7 +108,7 @@ portsPerService       = servicePortsPerEnv / servicesPerEnv     when the ports a
 platformServicePorts  = portsPerService * platformServices      unless declared
 servicePortsInCluster = envs * servicePortsPerEnv + platformServicePorts
 endpointsInCluster    = podsInCluster
-configObjectCount     = envs * configObjectsPerEnv
+configObjectCount     = envs * configObjectsPerEnv + platformConfigObjects
 ```
 - podsInCluster and servicesInCluster count every pod and Service in every namespace, in the mesh or not: ztunnel and istiod keep a workload for each pod, and a gateway without the flag sees every Service and every endpoint
 - Every pod is an endpoint of one Service
@@ -118,14 +121,16 @@ totalThroughputGbps     = mbpsPerPod * appPods / 1000
 newConnectionsPerSecond = newConnectionShare * totalRps
 connectionsPerNode      = connectionsPerPod * appPods / nodeCount
 ```
+- Requests, traffic and connections are counted once, at the pod that sends or opens them
 
 ### Traffic per node
 ```
 rpsPerNode            = 2 * totalRps / nodeCount
 newConnectionsPerNode = 2 * newConnectionsPerSecond / nodeCount
 throughputPerNodeGbps = 2 * totalThroughputGbps / nodeCount
+connectionEndsPerNode = 2 * connectionsPerNode
 ```
-- Each request crosses two ztunnels, the one of the client's node and the one of the server's node, hence the 2
+- Each request and each connection crosses two ztunnels, the one of the client's node and the one of the server's node, hence the 2
 - Traffic is spread evenly over the nodes
 
 ### Proxies of an environment
@@ -147,9 +152,9 @@ connectedProxies             = nodeCount + envs * (gatewaysPerEnv + 1) * proxyRe
 ztunnelCpuPerNode = 0.06 * rpsPerNode / 1000
                   + 0.2  * throughputPerNodeGbps
                   + 0.45 * newConnectionsPerNode / 1000
-                  + 0.04 * connectionsPerNode / 1000
+                  + 0.04 * connectionEndsPerNode / 1000
 ```
-- Measured on EKS with Istio 1.30.4, fortio between two nodes, one side of the connection each: 0.048–0.053 vCPU per 1000 requests per second, 0.13–0.20 per Gbps (HBONE, mTLS), 0.32 (server) to 0.43 (client) per 1000 new connections a second, about 0.04 per 1000 open connections at one request a second each beyond the requests themselves. The costs add up; they are not a maximum of each other
+- Measured on EKS with Istio 1.30.4, fortio between two nodes, one side of the connection each: 0.048–0.053 vCPU per 1000 requests per second, 0.13–0.20 per Gbps (HBONE, mTLS), 0.32 (server) to 0.43 (client) per 1000 new connections a second, about 0.04 per 1000 open connections, one side each, at one request a second each beyond the requests themselves. The costs add up; they are not a maximum of each other
 - Replaces `MAX(connectionsPerNode / 2000, throughputPerNodeGbps * 0.8)`: an open connection costs about a twelfth of that and a Gbps of the cluster's traffic half, while requests and new connections, which it left out, are what ztunnel spends most on with small messages
 - The chart's ztunnel CPU limit, 400m, was reached at about 1.6 Gbps between two nodes (throttled 22%); with small requests it covers about 6,000 requests a second crossing the node
 
@@ -165,7 +170,7 @@ ztunnelMemPerNodeMi  = roundUp(ztunnelUsedPerNodeMi * 1.5, 32)
 ```
 - 64 Mi base: an idle ztunnel with no pods of its own measured 2–3 Mi on kind. On a real EKS cluster with 13–19 pods per node and 83 workloads, ztunnel held 26–38 Mi, of which under 1 Mi is the cluster-size part below; the rest is the pods of its node (certificates, captured sockets) and the allocator. 64 Mi keeps about twice the highest node, a full node of pods included
 - 0.008 Mi (8 KiB) per pod and 0.004 Mi per Service of the whole cluster: istiod sends every ztunnel every workload and Service, on every node, whether the node runs them or not. Pods outside the mesh cost the same as pods in it. Measured 7.5–8.0 KiB per pod and 3.5–3.6 KiB per Service on kind with fake pods. A WorkloadEntry, which carries less metadata than a pod, costs less: under 1 KiB on EKS; the model takes the cost of a pod
-- 0.03 Mi per connection: both ends together, 12–14 KiB on the client side and 10 KiB on the server side, measured 0.023 Mi
+- 0.03 Mi per connection: both ends together, 12–14 KiB on the client side and 10 KiB on the server side, measured 0.023 Mi. The two ends sit on two nodes, so a node holds on average both ends of connectionsPerNode connections
 - 1.5 → peak of the busiest node over the measured average. ztunnel is a DaemonSet with one limit for every node, while connectionsPerNode is the average: connections are not spread evenly, and nodes running gateways, databases or brokers hold more of them, so the limit covers the busiest node rather than the average one; it also covers bursts of new connections above the steady state
 
 ---
@@ -202,13 +207,13 @@ hosts     = endpointsInScope * (clusters - 12) / servicesInScope
 idleMemMi = base + 0.092 * clusters + 0.018 * hosts
 ```
 - An endpoint sits in every cluster of its Service, one per port and per subset: a gateway holds 1.2 hosts per endpoint and port of its Service, a waypoint 1.6
-- 0.092 Mi (94 KiB) per Envoy cluster, pod working set, Istio 1.30. Measured on kind with Istio 1.30.4: 0.088 Mi per cluster on a gateway pod that received its config at start, 1 worker. A pod that grew into the same config can hold less, but a restart brings it back to the higher value, so the model follows the restarted pod. On a real EKS cluster a gateway restarted at each step added 106 Mi per 1000 Services of one port with two ambient endpoints each (WorkloadEntries), against 128 Mi in the model; at 2082 Services (2124 clusters, 4102 endpoints) the gateways held 218–258 Mi against 319 Mi in the model
+- 0.092 Mi (94 KiB) per Envoy cluster, pod working set, Istio 1.30. Measured on kind with Istio 1.30.4: 0.088 Mi per cluster on a gateway pod that received its config at start, 1 worker. A pod that grew into the same config can hold less, but a restart brings it back to the higher value, so the model follows the restarted pod. On a real EKS cluster a gateway restarted at each step added 106 Mi per 1000 Services of one port with two ambient endpoints each (WorkloadEntries), against 128 Mi from the coefficients at the one cluster per port that cluster had, and 154 Mi in the model at 1.2; at 2082 Services (2124 clusters, 4102 endpoints) the gateways held 218–258 Mi against 319 Mi from the coefficients at the clusters and endpoints they held
 - Envoy gives back only part of its memory when its config shrinks: on EKS, gateways that held 218–258 Mi at 2082 Services went to 110 Mi after 2000 of them were deleted, against 35 Mi before they were added; on another cluster running gateways went from 200–225 Mi to 100–106 Mi when the flag was turned on, while a new pod takes 51–55 Mi. A restart gives back the rest. Size for the largest config a gateway will have held since its last restart, not the current one
 - base = 50 Mi for a gateway; 29–32 Mi measured at idle on kind
 - base = 75 Mi for a waypoint: an idle waypoint holds more than its clusters account for, and that part varies between clusters, so the base is set high; 33–34 Mi measured on kind
 - Includes pilot-agent, which runs in the same `istio-proxy` container
 - 0.018 Mi (18 KiB) per endpoint of every cluster, measured 17–19 KiB on the gateway and the waypoint with ambient endpoints, which carry HBONE addresses. On EKS a WorkloadEntry endpoint cost about 9 KiB and a plain one about 5 KiB; a WorkloadEntry carries fewer labels and less metadata than a pod, so the coefficient follows the fake pods on kind. At 3 endpoints per Service, endpoints add 60% to a cluster. Without `PILOT_FILTER_GATEWAY_CLUSTER_CONFIG` a gateway holds the endpoints of every Service in the cluster
-- The per-cluster cost grows with the number of Envoy worker threads, each of which builds its own load balancer and host set for every cluster. Istio sets the number of workers to the CPU limit of the proxy, rounded up: 1 for the gateways and 2 for the waypoint in the current profiles. Measured: about 84 KiB plus 5 KiB per worker, so 88 KiB with 1 worker, 95 with 2 and 103 with 4; 0.092 Mi covers up to 2 workers, and a profile with a higher CPU limit adds 0.005 Mi per cluster for each worker above 2
+- The per-cluster cost grows with the number of Envoy worker threads, each of which builds its own load balancer and host set for every cluster. Istio sets the number of workers to the CPU limit of the proxy, rounded up: 1 for the gateways and 2 for the waypoint in the current profiles. Measured 88 KiB with 1 worker, 95 with 2 and 103 with 4, which fits about 84 KiB plus 5 KiB per worker; 0.092 Mi (94 KiB) is that fit at 2 workers, and a profile with a higher CPU limit adds 0.005 Mi per cluster for each worker above 2
 
 ### 4.3 Traffic
 
@@ -278,6 +283,8 @@ gatewayMemPerEnvMi = Σ gatewayLimitMi[gateway] * proxyReplicas
 | 250Mi | 1,507 / 1,295 | 753 / 647 | 235 / 117 |
 | 475Mi | 3,211 / 2,760 | 1,606 / 1,380 | 1,281 / 640 |
 | 512Mi | 3,492 / 3,001 | 1,746 / 1,500 | 1,453 / 727 |
+
+- The last column compares an existing limit with the model's need, `idleMemMi * 1.4 + trafficMemMi`; the rounding to 32 Mi of section 4.4 applies only when a limit is chosen
 
 ### CPU
 ```
@@ -356,32 +363,18 @@ istiodMemTotalMi = max(512, roundUp(istiodUsedMi * 2, 32))
 - 1 Mi per connected proxy: ztunnels (one per node), gateways and waypoints. A ztunnel connection measured 0.65–1.07 Mi of heap at 4000 pods, a waypoint under 1 Mi; both below the noise of the measurement, so this is an upper bound too
 - 2 → peak of the Go heap over the measured working set. The coefficients are the working set at rest, and istiod is a Go program: with `GOGC=100` its heap grows to twice the live data before a collection, so peaks up to twice the measured value are its normal course, most of all during a full push after a restart, when every proxy reconnects. istiod sets `GOMEMLIMIT` to 90% of its memory limit (`automemlimit`), so a tight limit does not fail at once but makes it collect more and more often, spending CPU at the moment of the push
 - Replicas do not share the memory: the HPA scales istiod on CPU, and every replica holds the state of the whole cluster, so the limit is per replica
-- 512 Mi at least, for small clusters; the upstream chart requests 2048 Mi, sized for a cluster of about 10,000 Services, pods and config objects by this formula
+- 512 Mi at least, for small clusters; the upstream chart requests 2048 Mi, which this formula reaches at about 5,000 Services, 5,000 pods and 5,000 config objects with 50 proxies
 
 ---
 
-## 8. CNI Sizing Recommendation
+## 8. istio-cni Sizing
 
-Final Recommendation (Based on General Consensus and Benchmarks)
+`istio-cni-node` is a DaemonSet that sets up the traffic redirection of the pods of its node; it carries no traffic. Its use does not grow with the traffic, so it is sized from the requests of the chart, `cni.resources.requests`, per node:
 
-### CPU
 ```
-cniCpuTotal = 0.4 
+cniCpuTotal   = 0.1 * nodeCount
+cniMemTotalMi = 128 * nodeCount
 ```
-- (value by default) Negligible. Typically, the CNI doesn't consume much CPU directly unless network policies are complex or there’s a significant amount of pod-to-pod traffic with encryption.
-
-### Memory
-```
-cniMemTotalMi =  nodeCount * 100
-```
-- ~100 Mi per node. This accounts for network management, routing, and metadata tracking that the CNI handles.
-
-These figures are based on typical Kubernetes and Istio ambient mesh deployments where the network policies aren't overly complex and where the traffic is balanced. In most Istio deployments, the CNI's role is minimal compared to the load generated by the proxy (like ztunnel) and control plane (istiod), unless there's a heavy reliance on network policies.
-
----
-
-**Note:**
-According to Kubernetes documentation and CNI provider scaling guides, CNI can handle around 500 pods per vCPU under moderate load. This is based on Kubernetes and CNI providers like Calico, Cilium, and Flannel, where CPU utilization scales linearly with the number of pods. However, this calculation isn't used in your case due to the specific assumptions for Istio Ambient Mesh.
 
 ## 9. Results
 
@@ -391,6 +384,16 @@ istioCpu   = ztunnelCpuTotal + istiodCpuTotal + cniCpuTotal
 istioMemMi = ztunnelMemTotalMi + istiodMemTotalMi + cniMemTotalMi
 ```
 Loads at peak: CPU at peak traffic, memory with the peak factors of sections 3 and 7; the limits of each component should cover them with the safety margin of section 13. istiod grows with the proxies of every environment through connectedProxies.
+
+The results go into the chart values per pod:
+
+| Chart value | Result |
+|---|---|
+| `ztunnel.resources.limits.cpu` | `ztunnelCpuPerNode` |
+| `ztunnel.resources.limits.memory` | `ztunnelMemPerNodeMi` |
+| `istiod.resources.limits.cpu` | `istiodCpuTotal`, per replica |
+| `istiod.resources.limits.memory` | `istiodMemTotalMi`, per replica |
+| `cni.resources` | the requests of the chart, as they are |
 
 ### 9.2 Proxies of one environment
 
@@ -461,7 +464,7 @@ clusterProxyMemMi = envs * envProxyMemMi
 
 | Component | Scaling Driver | Rule of Thumb |
 |----------|--------------|--------------|
-| ztunnel CPU | Requests, bytes, connections per node | 0.06/1000 rps + 0.2/Gbps + 0.45/1000 new conn/s + 0.04/1000 open conns |
+| ztunnel CPU | Requests, bytes, connections per node | 0.06/1000 rps + 0.2/Gbps + 0.45/1000 new conn/s + 0.04/1000 open connection ends |
 | ztunnel Memory | Cluster size + connections | (64 Mi + 0.008 Mi/pod + 0.004 Mi/Service of the cluster + 0.03 Mi/conn) * 1.5 |
 | Envoy clusters | Service ports in scope | gateway 1.2 per Service port + 12, waypoint 1.6 per Service port + 12 |
 | Envoy idle memory | Envoy clusters + endpoints | base + 0.092 Mi per cluster + 0.018 Mi per host, 1.2 hosts per endpoint and port on a gateway (gateway base 50, waypoint base 75) |
@@ -478,7 +481,7 @@ clusterProxyMemMi = envs * envProxyMemMi
 
 ## 12. Calibration
 
-The memory coefficients of Envoy, ztunnel and istiod are taken on Istio 1.30.4 with the CPU limits of the current profiles, on kind, in two runs that agreed within 10%; the ranges above are those of the two runs. A real EKS cluster then checked them: a snapshot of what it runs and a series of 2000 added Services. The CPU coefficients were measured on that cluster: fortio through a gateway, a waypoint and ztunnel, and rollout restarts for istiod. The gateway coefficients held, with the model 20–30% above what the gateways used at 2000 Services, and the istiod cost per Service matched; the ztunnel base was lowered from 150 to 64 Mi.
+The memory coefficients of Envoy, ztunnel and istiod are taken on Istio 1.30.4 with the CPU limits of the current profiles, on kind, in two runs that agreed within 10%; the ranges above are those of the two runs. A real EKS cluster then checked them: a snapshot of what it runs and a series of 2000 added Services. The CPU coefficients were measured on that cluster: fortio through a gateway, a waypoint and ztunnel, and rollout restarts for istiod. The gateway coefficients held, with the model 24–46% above what the gateways used at 2082 Services, and the istiod cost per Service matched; the ztunnel base was lowered from 150 to 64 Mi.
 
 ---
 
@@ -503,7 +506,7 @@ The memory coefficients of Envoy, ztunnel and istiod are taken on Istio 1.30.4 w
 - **profile** = prod
 - **nodeCount** = 10
 - **envs** = 1
-- **platformServices** = 300, **platformPods** = 300
+- **platformServices** = 300, **platformPods** = 300, **platformConfigObjects** = 0
 - **filterGatewayClusters**: both cases below; **egressGateway** = true
 - **servicesPerEnv** = 400, **portsPerService** = 2
 - **podsPerEnv** = 800 (2 replicas per microservice)
@@ -514,7 +517,7 @@ The memory coefficients of Envoy, ztunnel and istiod are taken on Istio 1.30.4 w
 appPods = **800**, podsInCluster = endpointsInCluster = 800 + 300 = **1100**, servicesInCluster = 400 + 300 = **700**  
 configObjectCount = 1 * 1600 = **1600**  
 totalRps = 25 * 800 = **20000**, totalThroughputGbps = 12.5 * 800 / 1000 = **10**, newConnectionsPerSecond = **2000**  
-connectionsPerNode = 20 * 800 / 10 = **1600**  
+connectionsPerNode = 20 * 800 / 10 = **1600**, connectionEndsPerNode = **3200**  
 rpsPerNode = **4000**, newConnectionsPerNode = **400**, throughputPerNodeGbps = **2**  
 referencedEndpoints = public 480, private 320, egress 2  
 servicePortsPerEnv = 2 * 400 = **800**, servicePortsInCluster = 800 + 2 * 300 = **1400**, connectedProxies = 10 + 1 * 4 * 2 = **18**
@@ -523,10 +526,12 @@ servicePortsPerEnv = 2 * 400 = **800**, servicePortsInCluster = 800 + 2 * 300 = 
 
 | Component | CPU | Memory |
 |---|---|---|
-| ztunnel | 0.06 * 4 + 0.2 * 2 + 0.45 * 0.4 + 0.04 * 1.6 ≈ 0.88 per node, **8.8 vCPU** | 64 + 0.008 * 1100 + 0.004 * 700 + 0.03 * 1600 ≈ 124 Mi used, roundUp(124 * 1.5) = 192 Mi per node, **1920 Mi** |
+| ztunnel | 0.06 * 4 + 0.2 * 2 + 0.45 * 0.4 + 0.04 * 3.2 ≈ 0.95 per node, **9.5 vCPU** | 64 + 0.008 * 1100 + 0.004 * 700 + 0.03 * 1600 ≈ 124 Mi used, roundUp(124 * 1.5) = 192 Mi per node, **1920 Mi** |
 | istiod | **0.5 vCPU** | 50 + 0.07 * 700 + 0.05 * 1100 + 0.05 * 1600 + 18 = 252 Mi used, max(512, roundUp(252 * 2)) = **512 Mi** |
-| CNI | **0.4 vCPU** | 100 * 10 = **1000 Mi** |
-| **Istio total** | **9.7 vCPU** | **3432 Mi** |
+| istio-cni | 0.1 * 10 = **1 vCPU** | 128 * 10 = **1280 Mi** |
+| **Istio total** | **11 vCPU** | **3712 Mi** |
+
+- Against the defaults of `values.yaml`: ztunnel needs 0.95 vCPU per node against its 400m limit, and istiod 0.5 vCPU against 400m; memory fits, 192 Mi against 512Mi for ztunnel and 512 Mi against 1Gi for istiod
 
 #### Proxies of the environment
 
@@ -558,7 +563,7 @@ For reference: in a cluster with 1,713 Services the private and egress gateways 
 - **profile** = dev
 - **nodeCount** = 10
 - **envs** = 10
-- **platformServices** = 300, **platformPods** = 300
+- **platformServices** = 300, **platformPods** = 300, **platformConfigObjects** = 0
 - **filterGatewayClusters**: both cases below; **egressGateway** = true
 - **servicesPerEnv** = 300, **portsPerService** = 2
 - **podsPerEnv** = 300 (1 replica per microservice)
@@ -569,7 +574,7 @@ For reference: in a cluster with 1,713 Services the private and egress gateways 
 appPods = 10 * 300 = **3000**, podsInCluster = endpointsInCluster = 3000 + 300 = **3300**, servicesInCluster = 3000 + 300 = **3300**  
 configObjectCount = 10 * 1200 = **12000**  
 totalRps = 1 * 3000 = **3000**, totalThroughputGbps = 0.5 * 3000 / 1000 = **1.5**, newConnectionsPerSecond = **300**  
-connectionsPerNode = 5 * 3000 / 10 = **1500**  
+connectionsPerNode = 5 * 3000 / 10 = **1500**, connectionEndsPerNode = **3000**  
 rpsPerNode = **600**, newConnectionsPerNode = **60**, throughputPerNodeGbps = **0.3**  
 referencedEndpoints = public 180, private 120, egress 1, in each environment  
 servicePortsPerEnv = 2 * 300 = **600**, servicePortsInCluster = 10 * 600 + 2 * 300 = **6600**, connectedProxies = 10 + 10 * 4 * 1 = **50**
@@ -578,10 +583,12 @@ servicePortsPerEnv = 2 * 300 = **600**, servicePortsInCluster = 10 * 600 + 2 * 3
 
 | Component | CPU | Memory |
 |---|---|---|
-| ztunnel | 0.06 * 0.6 + 0.2 * 0.3 + 0.45 * 0.06 + 0.04 * 1.5 ≈ 0.18 per node, **1.8 vCPU** | 64 + 0.008 * 3300 + 0.004 * 3300 + 0.03 * 1500 ≈ 149 Mi used, roundUp(149 * 1.5) = 224 Mi per node, **2240 Mi** |
+| ztunnel | 0.06 * 0.6 + 0.2 * 0.3 + 0.45 * 0.06 + 0.04 * 3 ≈ 0.24 per node, **2.4 vCPU** | 64 + 0.008 * 3300 + 0.004 * 3300 + 0.03 * 1500 ≈ 149 Mi used, roundUp(149 * 1.5) = 224 Mi per node, **2240 Mi** |
 | istiod | **0.5 vCPU** | 50 + 0.07 * 3300 + 0.05 * 3300 + 0.05 * 12000 + 50 = 1096 Mi used, roundUp(1096 * 2) = **2208 Mi** |
-| CNI | **0.4 vCPU** | 100 * 10 = **1000 Mi** |
-| **Istio total** | **2.7 vCPU** | **5448 Mi** |
+| istio-cni | 0.1 * 10 = **1 vCPU** | 128 * 10 = **1280 Mi** |
+| **Istio total** | **3.9 vCPU** | **5728 Mi** |
+
+- Against the defaults of `values.yaml`: istiod needs 0.5 vCPU against its 400m limit and 2208 Mi against 1Gi; ztunnel fits, 0.24 vCPU and 224 Mi against 400m and 512Mi
 
 #### Proxies of one environment
 
