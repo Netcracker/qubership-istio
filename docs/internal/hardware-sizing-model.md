@@ -26,7 +26,7 @@ One environment; where environments differ, the largest one:
 - portsPerService: average ports per Service of the environment, in place of servicePortsPerEnv when the ports are not counted
 - podsPerEnv: pods at peak, every replica and the HPA's maximum included: they are the endpoints of its Services and the workloads ztunnel and istiod keep
 - configObjectsPerEnv: Istio and Gateway API objects of the namespace: routes, AuthorizationPolicies, DestinationRules, ServiceEntries, EnvoyFilters
-- referencedServices[public], referencedServices[private], referencedServices[egress]: distinct Services the routes attached to each gateway point at, and those in the `envoyfilter.istio.io/referenced-services` annotation of its EnvoyFilters. With the flag their ports give the gateway's Envoy clusters, so the gateways differ: egress, with only its fallback route, references one Service, and egress < private < public
+- referencedServices[public], referencedServices[private], referencedServices[egress]: distinct Services and ServiceEntry hosts the routes attached to each gateway point at, and those in the `envoyfilter.istio.io/referenced-services` annotation of its EnvoyFilters. With the flag their ports give the gateway's Envoy clusters, so the gateways differ: egress, with only its fallback route, references one Service, and egress < private < public
 - referencedEndpoints[gateway], optional: endpoints of those Services at peak. Without it the model gives them the average number of pods per Service of the environment
 
 ### 1.2 Profile values
@@ -59,18 +59,23 @@ kubectl get deploy,statefulset,hpa -n $NS -o json | jq '
 # configObjectsPerEnv
 kubectl get httproutes,grpcroutes,authorizationpolicies,destinationrules,serviceentries,envoyfilters,peerauthentications -n $NS -o name | wc -l
 
-# referencedServices of each gateway: backends of the routes from any namespace attached to it,
-# and the referenced-services annotation of the EnvoyFilters that target it
+# referencedServices of each gateway, as hostnames: the backends of the routes from any namespace attached to it,
+# Services and ServiceEntry hosts, and the referenced-services annotation of the EnvoyFilters in its namespace and
+# in the root namespace. An EnvoyFilter without targetRefs is counted for every gateway: check its workloadSelector
+ROOT_NS=istio-system
 for GW in public-gateway private-gateway egress-gateway; do
   { kubectl get httproutes,grpcroutes -A -o json | jq -r --arg ns $NS --arg gw $GW '
       .items[] | .metadata.namespace as $rns
       | select(any(.spec.parentRefs[]; .name == $gw and (.namespace // $rns) == $ns))
-      | .spec.rules[]?.backendRefs[]? | select((.kind // "Service") == "Service")
-      | "\(.namespace // $rns)/\(.name)"'
-    kubectl get envoyfilters -n $NS -o json | jq -r --arg gw $GW '
-      .items[] | select(any(.spec.targetRefs[]?; .name == $gw))
-      | .metadata.annotations["envoyfilter.istio.io/referenced-services"] // empty
-      | split(",")[] | split("/") | "\(.[0])/\(.[1] | split(".")[0])"'
+      | .spec.rules[]?.backendRefs[]?
+      | if (.kind // "Service") == "Service" then "\(.name).\(.namespace // $rns).svc.cluster.local"
+        elif .kind == "Hostname" then .name else empty end'
+    for EF_NS in $NS $ROOT_NS; do
+      kubectl get envoyfilters -n $EF_NS -o json | jq -r --arg gw $GW '
+        .items[] | select(any(.spec.targetRefs[]?; .name == $gw) or .spec.targetRefs == null)
+        | .metadata.annotations["envoyfilter.istio.io/referenced-services"] // empty
+        | split(",")[] | gsub("^\\s+|\\s+$"; "") | split("/")[1] // empty'
+    done
   } | sort -u | wc -l
 done
 
@@ -253,7 +258,7 @@ endpointsInScope = filterGatewayClusters ? referencedEndpoints[gateway]         
 
 ```
 gatewayClusters = 1.2 * portsInScope + 12
-gatewayHosts    = 1.2 * portsPerService * endpointsInScope
+gatewayHosts    = 1.2 * endpointsInScope * portsInScope / servicesInScope
 gatewayIdleMi   = 50 + 0.092 * gatewayClusters + 0.018 * gatewayHosts
 gatewayLimitMi  = roundUp(gatewayIdleMi * 1.4 + trafficMemMi, 32)
 ```
@@ -527,7 +532,7 @@ servicePortsPerEnv = 2 * 400 = **800**, servicePortsInCluster = 800 + 2 * 300 = 
 
 | Proxy | Services in scope | Envoy clusters | Hosts | Idle | Limit per pod |
 |---|---|---|---|---|---|
-| gateway, flag off | 700, 1400 ports | 1.2 * 1400 + 12 = 1692 | 1.2 * 2 * 1100 = 2640 | 50 + 0.092 * 1692 + 0.018 * 2640 = 253 Mi | roundUp(253 * 1.4 + 128) = **512 Mi** |
+| gateway, flag off | 700, 1400 ports | 1.2 * 1400 + 12 = 1692 | 1.2 * 1100 * 1400 / 700 = 2640 | 50 + 0.092 * 1692 + 0.018 * 2640 = 253 Mi | roundUp(253 * 1.4 + 128) = **512 Mi** |
 | public, flag on | 240, 480 ports | 588 | 1152 | 125 Mi | **320 Mi** |
 | private, flag on | 160, 320 ports | 396 | 768 | 100 Mi | **288 Mi** |
 | egress, flag on | 1, 2 ports | 14 | 5 | 51 Mi | **224 Mi** |
@@ -582,7 +587,7 @@ servicePortsPerEnv = 2 * 300 = **600**, servicePortsInCluster = 10 * 600 + 2 * 3
 
 | Proxy | Services in scope | Envoy clusters | Hosts | Idle | Limit per pod |
 |---|---|---|---|---|---|
-| gateway, flag off | 3300, 6600 ports | 1.2 * 6600 + 12 = 7932 | 1.2 * 2 * 3300 = 7920 | 50 + 0.092 * 7932 + 0.018 * 7920 = 922 Mi | roundUp(922 * 1.4 + 32) = **1344 Mi** |
+| gateway, flag off | 3300, 6600 ports | 1.2 * 6600 + 12 = 7932 | 1.2 * 3300 * 6600 / 3300 = 7920 | 50 + 0.092 * 7932 + 0.018 * 7920 = 922 Mi | roundUp(922 * 1.4 + 32) = **1344 Mi** |
 | public, flag on | 180, 360 ports | 444 | 432 | 99 Mi | **192 Mi** |
 | private, flag on | 120, 240 ports | 300 | 288 | 83 Mi | **160 Mi** |
 | egress, flag on | 1, 2 ports | 14 | 2 | 51 Mi | **128 Mi** |

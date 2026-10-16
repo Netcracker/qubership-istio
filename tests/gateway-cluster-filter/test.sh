@@ -14,7 +14,10 @@ set -eux
 #   referenced  named only by an EnvoyFilter cluster_name dropped with the flag,
 #                                                         back once the EnvoyFilter
 #                                                         carries the annotation,
-#                                                         kept through route changes
+#                                                         kept through route changes;
+#                                                         never on a second gateway
+#                                                         the EnvoyFilter does not
+#                                                         target
 #   late        Service and HTTPRoute created after the flag is on, then the
 #               route deleted: cluster added, then removed
 #   bulk-*      20 Services without routes: active_clusters drops by at least 20
@@ -28,6 +31,8 @@ source "${TEST_DIR}/../lib/proxy.sh"
 
 GW_NAME=cluster-filter-gw
 GW_SELECTOR="gateway.networking.k8s.io/gateway-name=${GW_NAME}"
+GW2_NAME=cluster-filter-gw2
+GW2_SELECTOR="gateway.networking.k8s.io/gateway-name=${GW2_NAME}"
 NS=cluster-filter-test
 BULK_NS=cluster-filter-bulk
 BULK_COUNT=20
@@ -47,8 +52,8 @@ set_flag() {
 cleanup() {
   set_flag "${FLAG_DEFAULT}" || true
   kubectl delete envoyfilter "${EF_NAME}" -n "${ISTIO_NAMESPACE}" --ignore-not-found
-  kubectl delete gateways.gateway.networking.k8s.io "${GW_NAME}" -n "${ISTIO_NAMESPACE}" --ignore-not-found
-  kubectl delete configmap "${GW_NAME}-options" -n "${ISTIO_NAMESPACE}" --ignore-not-found
+  kubectl delete gateways.gateway.networking.k8s.io "${GW_NAME}" "${GW2_NAME}" -n "${ISTIO_NAMESPACE}" --ignore-not-found
+  kubectl delete configmap "${GW_NAME}-options" "${GW2_NAME}-options" -n "${ISTIO_NAMESPACE}" --ignore-not-found
   kubectl delete namespace "${NS}" "${BULK_NS}" --ignore-not-found
 }
 trap cleanup EXIT
@@ -65,28 +70,33 @@ gw_admin() {
   proxy_admin "${ISTIO_NAMESPACE}" "${pod}" "$1"
 }
 
-# wait_cluster present|absent <cluster>
+# wait_cluster present|absent <cluster> [gateway selector]
 wait_cluster() {
   local pod
-  pod=$(gw_pod)
+  pod=$(proxy_pod "${ISTIO_NAMESPACE}" "${3:-${GW_SELECTOR}}")
   proxy_wait_cluster "${ISTIO_NAMESPACE}" "${pod}" "$1" "$2"
 }
 
+# expect_cluster present|absent <cluster> [gateway selector]
 expect_cluster() {
-  local want="$1" cluster="$2" pod
-  pod=$(gw_pod)
-  if proxy_has_cluster "${ISTIO_NAMESPACE}" "${pod}" "${cluster}"; then
-    [ "${want}" = present ] || fail "cluster ${cluster}: expected absent, found present"
-  else
-    [ "${want}" = absent ] || fail "cluster ${cluster}: expected present, found absent"
-  fi
-  ok "${cluster} ${want}"
+  local want="$1" cluster="$2" pod rc=0
+  pod=$(proxy_pod "${ISTIO_NAMESPACE}" "${3:-${GW_SELECTOR}}")
+  proxy_has_cluster "${ISTIO_NAMESPACE}" "${pod}" "${cluster}" || rc=$?
+  case "${rc}" in
+    0) [ "${want}" = present ] || fail "cluster ${cluster} on ${pod}: expected absent, found present" ;;
+    1) [ "${want}" = absent ] || fail "cluster ${cluster} on ${pod}: expected present, found absent" ;;
+    *) fail "cannot read the clusters of ${pod}" ;;
+  esac
+  ok "${cluster} ${want} on ${pod}"
 }
 
 active_clusters() {
-  local pod
-  pod=$(gw_pod) || return 1
-  proxy_stat "${ISTIO_NAMESPACE}" "${pod}" cluster_manager.active_clusters
+  local pod value
+  pod=$(gw_pod)
+  value=$(proxy_stat "${ISTIO_NAMESPACE}" "${pod}" cluster_manager.active_clusters) ||
+    fail "cannot read active_clusters of ${pod}"
+  [[ "${value}" =~ ^[0-9]+$ ]] || fail "active_clusters of ${pod}: got '${value}'"
+  echo "${value}"
 }
 
 # The listener still carries the ext_proc filter, so Envoy accepted the
@@ -157,9 +167,11 @@ fixtures_create --set-string "services.namespace=${BULK_NS},services.prefix=bulk
 
 kubectl rollout status deployment/routed -n "${NS}" --timeout=120s
 
-fixtures_apply --set-string "gateway.name=${GW_NAME},gateway.namespace=${ISTIO_NAMESPACE}"
-kubectl wait gateways.gateway.networking.k8s.io/"${GW_NAME}" -n "${ISTIO_NAMESPACE}" --for=condition=Programmed --timeout=120s
-kubectl rollout status "deployment/${GW_NAME}-istio" -n "${ISTIO_NAMESPACE}" --timeout=120s
+for gw in "${GW_NAME}" "${GW2_NAME}"; do
+  fixtures_apply --set-string "gateway.name=${gw},gateway.namespace=${ISTIO_NAMESPACE}"
+  kubectl wait gateways.gateway.networking.k8s.io/"${gw}" -n "${ISTIO_NAMESPACE}" --for=condition=Programmed --timeout=120s
+  kubectl rollout status "deployment/${gw}-istio" -n "${ISTIO_NAMESPACE}" --timeout=120s
+done
 
 apply_route routed routed /
 expect_traffic
@@ -182,6 +194,7 @@ wait_cluster present "$(cluster_of "bulk-${BULK_COUNT}" "${BULK_NS}")"
 expect_cluster present "$(cluster_of routed)"
 expect_cluster present "$(cluster_of unrouted)"
 expect_cluster present "$(cluster_of referenced)"
+wait_cluster present "$(cluster_of referenced)" "${GW2_SELECTOR}"
 expect_ext_proc_in_listener
 ACTIVE_OFF=$(active_clusters)
 log "active_clusters with the flag off: ${ACTIVE_OFF}"
@@ -196,6 +209,7 @@ wait_cluster absent "$(cluster_of unrouted)"
 expect_cluster present "$(cluster_of routed)"
 expect_cluster absent "$(cluster_of referenced)"
 expect_cluster absent "$(cluster_of bulk-1 "${BULK_NS}")"
+wait_cluster absent "$(cluster_of referenced)" "${GW2_SELECTOR}"
 expect_ext_proc_in_listener
 expect_traffic
 
@@ -213,6 +227,7 @@ kubectl annotate envoyfilter "${EF_NAME}" -n "${ISTIO_NAMESPACE}" \
 
 wait_cluster present "$(cluster_of referenced)"
 expect_cluster absent "$(cluster_of unrouted)"
+expect_cluster absent "$(cluster_of referenced)" "${GW2_SELECTOR}"
 expect_traffic
 
 # ---------------------------------------------------------------------------

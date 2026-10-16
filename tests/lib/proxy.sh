@@ -5,9 +5,10 @@
 # Sourced — not executed.
 #
 # The caller sets ISTIO_NAMESPACE; istiod_set_env also needs HELM_RELEASE and
-# HELM_CHART_PATH. Checks (proxy_has_cluster) and reads (proxy_stat) return
-# non-zero for the caller to handle; waits end the script through fail() when
-# they time out. All of them work with and without `set -o pipefail`.
+# HELM_CHART_PATH. proxy_has_cluster returns 0 for present, 1 for absent and 2
+# when the proxy cannot be read; proxy_stat returns non-zero when it cannot be
+# read; waits end the script through fail() when they time out. All of them
+# work with and without `set -o pipefail`.
 # ---------------------------------------------------------------------------
 
 [ -n "${_TESTS_LIB_PROXY:-}" ] && return 0
@@ -59,7 +60,7 @@ proxy_cluster_names() {
 # proxy_has_cluster <namespace> <pod> <cluster>
 proxy_has_cluster() {
   local names
-  names=$(proxy_cluster_names "$1" "$2") || return 1
+  names=$(set -o pipefail; proxy_cluster_names "$1" "$2") || return 2
   grep -qxF "$3" <<<"${names}"
 }
 
@@ -71,13 +72,15 @@ proxy_outbound_clusters() {
 # proxy_wait_cluster <namespace> <pod> present|absent <cluster>
 # istiod pushes asynchronously; waits up to two minutes.
 proxy_wait_cluster() {
-  local ns="$1" pod="$2" want="$3" cluster="$4"
+  local ns="$1" pod="$2" want="$3" cluster="$4" rc
   for i in $(seq 1 24); do
-    if proxy_has_cluster "${ns}" "${pod}" "${cluster}"; then
-      [ "${want}" = present ] && return 0
-    else
-      [ "${want}" = absent ] && return 0
-    fi
+    rc=0
+    proxy_has_cluster "${ns}" "${pod}" "${cluster}" || rc=$?
+    case "${rc}" in
+      0) [ "${want}" = present ] && return 0 ;;
+      1) [ "${want}" = absent ] && return 0 ;;
+      *) log "cannot read the clusters of ${pod}" ;;
+    esac
     log "waiting for ${cluster} to be ${want} (${i}/24)"
     sleep 5
   done
