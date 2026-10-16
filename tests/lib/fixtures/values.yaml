@@ -10,7 +10,7 @@ gateway: {}
 
 # One path of a gateway to port 80 of a Service.
 #   name, namespace, gateway, gatewayNamespace, backend (required)
-#   pathPrefix (default /), hostname (optional)
+#   pathPrefix (default /)
 httpRoute: {}
 
 # Services <prefix>-<from>..<prefix>-<to> without a selector, so without
@@ -28,10 +28,3 @@ services: {}
 #   name, namespace, gateway, cluster (required)
 #   referencedServices (optional): value of the annotation
 clusterRefFilter: {}
-
-# An AuthorizationPolicy on a gateway that denies every request for one host:
-# with a route that exists only to keep a Service's cluster on the gateway
-# (pinned under PILOT_FILTER_GATEWAY_CLUSTER_CONFIG), nobody can use that route.
-#   name, namespace, gateway, host (required)
-#   port: the gateway's HTTP listener port (default 80)
-denyHost: {}

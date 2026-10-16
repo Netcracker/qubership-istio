@@ -245,7 +245,7 @@ servicesInScope  = filterGatewayClusters ? referencedServices[gateway]          
 portsInScope     = filterGatewayClusters ? referencedServices[gateway] * portsPerService : servicePortsInCluster
 endpointsInScope = filterGatewayClusters ? referencedEndpoints[gateway]                  : endpointsInCluster
 ```
-- Without the flag (the istiod default) a gateway gets the clusters of all Services in all namespaces, whether its routes use them or not. Its memory grows with the cluster, not with what it serves
+- Without the flag (the istiod default; this chart turns it on) a gateway gets the clusters of all Services in all namespaces, whether its routes use them or not. Its memory grows with the cluster, not with what it serves
 - With the flag, only Services the gateway references, with all their ports. Egress with only its fallback route references one Service
 - An EnvoyFilter that names a cluster directly (`envoy_grpc.cluster_name: outbound|...`) of a Service no route of the gateway points at keeps it through the `envoyfilter.istio.io/referenced-services` annotation, and that Service counts as referenced: see [Gateway cluster filtering](../public/installation.md#gateway-cluster-filtering)
 

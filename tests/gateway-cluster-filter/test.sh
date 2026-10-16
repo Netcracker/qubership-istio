@@ -14,12 +14,7 @@ set -eux
 #   referenced  named only by an EnvoyFilter cluster_name dropped with the flag,
 #                                                         back once the EnvoyFilter
 #                                                         carries the annotation,
-#                                                         lost again on a route
-#                                                         change (istio/istio#62067);
-#                                                         then pinned by a route of
-#                                                         its own that a DENY policy
-#                                                         closes: kept through route
-#                                                         changes
+#                                                         kept through route changes
 #   late        Service and HTTPRoute created after the flag is on, then the
 #               route deleted: cluster added, then removed
 #   bulk-*      20 Services without routes: active_clusters drops by at least 20
@@ -37,9 +32,8 @@ NS=cluster-filter-test
 BULK_NS=cluster-filter-bulk
 BULK_COUNT=20
 EF_NAME=cluster-filter-ext-proc
-PIN_HOST=pin-referenced.invalid
-DENY_NAME=cluster-filter-deny-pin
 FLAG=PILOT_FILTER_GATEWAY_CLUSTER_CONFIG
+FLAG_DEFAULT=true
 DOMAIN=svc.cluster.local
 
 cluster_of() {
@@ -51,9 +45,8 @@ set_flag() {
 }
 
 cleanup() {
-  set_flag false || true
+  set_flag "${FLAG_DEFAULT}" || true
   kubectl delete envoyfilter "${EF_NAME}" -n "${ISTIO_NAMESPACE}" --ignore-not-found
-  kubectl delete authorizationpolicies.security.istio.io "${DENY_NAME}" -n "${ISTIO_NAMESPACE}" --ignore-not-found
   kubectl delete gateways.gateway.networking.k8s.io "${GW_NAME}" -n "${ISTIO_NAMESPACE}" --ignore-not-found
   kubectl delete configmap "${GW_NAME}-options" -n "${ISTIO_NAMESPACE}" --ignore-not-found
   kubectl delete namespace "${NS}" "${BULK_NS}" --ignore-not-found
@@ -122,18 +115,6 @@ curl_gw() {
   return ${exit_code}
 }
 
-# gw_status <host> <path>: the HTTP status the gateway answers for that Host.
-gw_status() {
-  local port=18084 code
-  kubectl port-forward -n "${ISTIO_NAMESPACE}" "svc/${GW_NAME}-istio" "${port}:80" >/dev/null 2>&1 &
-  local pf_pid=$!
-  sleep 2
-  code=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $1" "http://127.0.0.1:${port}$2" || true)
-  kill "${pf_pid}" 2>/dev/null || true
-  wait "${pf_pid}" 2>/dev/null || true
-  echo "${code}"
-}
-
 expect_traffic() {
   for i in $(seq 1 12); do
     curl_gw /get && { ok "traffic flows through the gateway"; return 0; }
@@ -152,14 +133,14 @@ apply_route() {
 }
 
 # ---------------------------------------------------------------------------
-# 0. The chart default is off
+# 0. The chart default is on
 # ---------------------------------------------------------------------------
 DEFAULT=$(kubectl get deployment istiod -n "${ISTIO_NAMESPACE}" \
   -o jsonpath="{.spec.template.spec.containers[0].env[?(@.name==\"${FLAG}\")].value}")
-if [ "${DEFAULT}" != "false" ]; then
-  fail "${FLAG} on istiod: expected 'false', got '${DEFAULT}'"
+if [ "${DEFAULT}" != "${FLAG_DEFAULT}" ]; then
+  fail "${FLAG} on istiod: expected '${FLAG_DEFAULT}', got '${DEFAULT}'"
 fi
-ok "${FLAG}=false by default"
+ok "${FLAG}=${FLAG_DEFAULT} by default"
 
 # ---------------------------------------------------------------------------
 # 1. Services, Gateway, route
@@ -195,6 +176,8 @@ fixtures_apply \
 # ---------------------------------------------------------------------------
 # 3. Flag off: the gateway gets every Service
 # ---------------------------------------------------------------------------
+set_flag false
+
 wait_cluster present "$(cluster_of "bulk-${BULK_COUNT}" "${BULK_NS}")"
 expect_cluster present "$(cluster_of routed)"
 expect_cluster present "$(cluster_of unrouted)"
@@ -234,98 +217,25 @@ expect_traffic
 
 # ---------------------------------------------------------------------------
 # 6. Changes while the flag is on: a new Service and its route add a cluster,
-#    deleting the route removes it. The route change is an incremental push,
-#    which drops the annotated cluster until a release with the fix of
-#    istio/istio#62067.
+#    deleting the route removes it; the annotated cluster stays.
 # ---------------------------------------------------------------------------
 kubectl create service clusterip late --tcp=80:8080 -n "${NS}"
 apply_route late late /late
 
 wait_cluster present "$(cluster_of late)"
-pod=$(gw_pod)
-for i in $(seq 1 24); do
-  proxy_has_cluster "${ISTIO_NAMESPACE}" "${pod}" "$(cluster_of referenced)" || break
-  log "waiting for the route change to drop $(cluster_of referenced) (${i}/24)"
-  sleep 5
-done
-if proxy_has_cluster "${ISTIO_NAMESPACE}" "${pod}" "$(cluster_of referenced)"; then
-  fail "$(cluster_of referenced) survived a route change: istio/istio#62067 is fixed in this Istio." \
-    "Expect the cluster present in step 6, drop steps 7 and 8, and remove the note" \
-    "\"Istio 1.30.5 and earlier\" in docs/public/installation.md."
-fi
-ok "$(cluster_of referenced) dropped by the route change (istio/istio#62067)"
+expect_cluster present "$(cluster_of referenced)"
 
 kubectl delete httproute late -n "${NS}"
 wait_cluster absent "$(cluster_of late)"
 expect_cluster present "$(cluster_of routed)"
-expect_cluster absent "$(cluster_of referenced)"
+expect_cluster present "$(cluster_of referenced)"
 expect_traffic
 
 # ---------------------------------------------------------------------------
-# 7. A full push brings the annotated cluster back: any change to the
-#    EnvoyFilter. Only annotations with istio.io in the name trigger a push.
+# 7. Without the annotation the cluster goes
 # ---------------------------------------------------------------------------
-kubectl annotate envoyfilter "${EF_NAME}" -n "${ISTIO_NAMESPACE}" --overwrite \
-  "test.istio.io/touch=$(date +%s)"
-
-wait_cluster present "$(cluster_of referenced)"
-expect_cluster present "$(cluster_of routed)"
-expect_traffic
-
-# ---------------------------------------------------------------------------
-# 8. The workaround until a release fixes istio/istio#62067: pin the Service with a
-#    route. An HTTPRoute of the gateway for a host nobody uses, with
-#    "referenced" as its backend, makes it a route backend, which incremental
-#    pushes keep; a DENY policy on that host closes the route.
-#    Each check has its control: the host answers 503 (a route to a Service
-#    without endpoints) before the policy and 403 after it; the annotation is
-#    removed and the pin alone keeps the cluster, also through a route change
-#    (the one that loses it in step 6); deleting the pin then removes it.
-# ---------------------------------------------------------------------------
-
-# wait_status <host> <code>
-wait_status() {
-  local code=""
-  for i in $(seq 1 24); do
-    code=$(gw_status "$1" /)
-    [ "${code}" = "$2" ] && { ok "$1 answers $2"; return 0; }
-    log "waiting for $1 to answer $2: got ${code} (${i}/24)"
-    sleep 5
-  done
-  fail "$1: expected $2, got ${code}"
-}
-
-fixtures_apply \
-  --set-string "httpRoute.name=pin-referenced,httpRoute.namespace=${NS}" \
-  --set-string "httpRoute.gateway=${GW_NAME},httpRoute.gatewayNamespace=${ISTIO_NAMESPACE}" \
-  --set-string "httpRoute.backend=referenced,httpRoute.hostname=${PIN_HOST}"
-# The route is live and open: "referenced" has no endpoints.
-wait_status "${PIN_HOST}" 503
-
-fixtures_apply --set-string \
-  "denyHost.name=${DENY_NAME},denyHost.namespace=${ISTIO_NAMESPACE},denyHost.gateway=${GW_NAME},denyHost.host=${PIN_HOST}"
-wait_status "${PIN_HOST}" 403
-
-# Without the annotation (a full push) only the pin references the Service.
-# Read the cluster for half a minute rather than once.
 kubectl annotate envoyfilter "${EF_NAME}" -n "${ISTIO_NAMESPACE}" "envoyfilter.istio.io/referenced-services-"
-for _ in $(seq 1 6); do
-  expect_cluster present "$(cluster_of referenced)"
-  sleep 5
-done
 
-# The route change of step 6, which loses an annotated cluster.
-apply_route late late /late
-wait_cluster present "$(cluster_of late)"
-expect_cluster present "$(cluster_of referenced)"
-kubectl delete httproute late -n "${NS}"
-wait_cluster absent "$(cluster_of late)"
-expect_cluster present "$(cluster_of referenced)"
-expect_cluster absent "$(cluster_of unrouted)"
-expect_traffic
-
-# Control: without the pin the cluster goes.
-kubectl delete httproute pin-referenced -n "${NS}"
 wait_cluster absent "$(cluster_of referenced)"
 expect_cluster present "$(cluster_of routed)"
 expect_traffic

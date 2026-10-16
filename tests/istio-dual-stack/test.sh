@@ -46,6 +46,7 @@ cleanup() {
   kubectl delete service "${BACKEND_NAME}" -n default --ignore-not-found
   kubectl delete deployment "${BACKEND_NAME}" -n default --ignore-not-found
   kubectl delete pod "${CLIENT_POD}" -n default --ignore-not-found
+  kubectl delete httproute "${DNS_PROBE_NAME}" -n default --ignore-not-found
   kubectl delete serviceentry "${DNS_PROBE_NAME}" -n default --ignore-not-found
   kubectl delete namespace "${AMBIENT_NS}" --ignore-not-found
 }

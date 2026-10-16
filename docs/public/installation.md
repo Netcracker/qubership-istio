@@ -110,7 +110,7 @@ global:
 
 This value does three things:
 
-- The Istio [OpenShift profile](https://github.com/istio/istio/blob/1.30.5/manifests/helm-profiles/platform-openshift.yaml) puts the CNI plugin on the Multus paths, gives the agents the `spc_t` SELinux type, and makes the `cni` and `ztunnel` charts grant their service accounts the `privileged` SecurityContextConstraints.
+- The Istio [OpenShift profile](https://github.com/istio/istio/blob/1.30.6/manifests/helm-profiles/platform-openshift.yaml) puts the CNI plugin on the Multus paths, gives the agents the `spc_t` SELinux type, and makes the `cni` and `ztunnel` charts grant their service accounts the `privileged` SecurityContextConstraints.
 - istiod trusts ztunnel in `istio-system`. The profile points it at `kube-system`, where Istio installs ztunnel on OpenShift, and istiod issues no certificates to a ztunnel outside the trusted namespace. This distribution installs ztunnel in `istio-system`, so it sets `istiod.trustedZtunnelNamespace` to the release namespace itself. A value you set explicitly still takes precedence.
 - The Pod Security Admission hook is skipped, see [Pod Security Admission](#pod-security-admission-1).
 
@@ -157,7 +157,7 @@ global:
 
 This value does two things:
 
-- The Istio [GKE profile](https://github.com/istio/istio/blob/1.30.5/manifests/helm-profiles/platform-gke.yaml) makes the `cni` and `ztunnel` charts render ResourceQuotas for the `system-node-critical` priority class, which both agents run with. GKE admits such pods only into a namespace with that quota. Without it the DaemonSets create no pods: `insufficient quota to match these scopes`.
+- The Istio [GKE profile](https://github.com/istio/istio/blob/1.30.6/manifests/helm-profiles/platform-gke.yaml) makes the `cni` and `ztunnel` charts render ResourceQuotas for the `system-node-critical` priority class, which both agents run with. GKE admits such pods only into a namespace with that quota. Without it the DaemonSets create no pods: `insufficient quota to match these scopes`.
 - The CNI plugin goes to `/home/kubernetes/bin`, where GKE looks for it. The upstream chart picks that directory only when the Kubernetes version it renders for contains `-gke`. A render that does not see the real cluster version misses the suffix, such as `helm template` or a deployment tool that drops vendor suffixes from the version, so this distribution sets the directory for `gke` itself. To use another directory, set `cni.cni.cniBinDir`: the `gke` profile overrides the shorter `cni.cniBinDir`.
 
 Gateway API and Pod Security Admission need nothing beyond [Kubernetes](#kubernetes).
@@ -267,7 +267,7 @@ The values below are set by this chart; everything else keeps the vanilla defaul
 | `istiod.meshConfig.defaultConfig.gatewayTopology.numTrustedProxies`                                | `1`                                                                    | How many proxies sit in front of a gateway, which decides the client address a gateway reads from `X-Forwarded-For`. Set it to the real number of hops, otherwise the address is wrong                                                                                                                                                                   |
 | `istiod.gatewayClasses.istio.service.spec.type`                                                    | `ClusterIP`                                                            | Gateways created from the `istio` class get no cloud load balancer. Set `LoadBalancer` where one is wanted                                                                                                                                                                                                                                               |
 | `istiod.env.ISTIO_DUAL_STACK` and `istiod.meshConfig.defaultConfig.proxyMetadata.ISTIO_DUAL_STACK` | `"false"`                                                              | Dual-stack support. Both have to be changed together: the mesh config carries the flag into gateway pods, and only a restarted istiod reconciles existing gateways with it                                                                                                                                                                               |
-| `istiod.env.PILOT_FILTER_GATEWAY_CLUSTER_CONFIG`                                                   | `"false"`                                                              | `"true"` sends each gateway only the Envoy clusters of the Services it references, so gateway memory no longer grows with the number of Services in the cluster. An `EnvoyFilter` that calls a Service by cluster name needs the Service in its `envoyfilter.istio.io/referenced-services` annotation, see [Gateway cluster filtering](#gateway-cluster-filtering) |
+| `istiod.env.PILOT_FILTER_GATEWAY_CLUSTER_CONFIG`                                                   | `"true"`                                                               | `"true"` sends each gateway only the Envoy clusters of the Services it references, so gateway memory no longer grows with the number of Services in the cluster. An `EnvoyFilter` that calls a Service by cluster name needs the Service in its `envoyfilter.istio.io/referenced-services` annotation, see [Gateway cluster filtering](#gateway-cluster-filtering) |
 | `ztunnel.meshConfig.defaultConfig.proxyMetadata`                                                   | `ISTIO_META_DNS_CAPTURE: "true"`, `ISTIO_META_ROUTER_MODE: "sni-dnat"` | Proxy metadata the chart sets for ztunnel                                                                                                                                                                                                                                                                                                                |
 | `cni.excludeNamespaces`                                                                            | `kube-system`, and the chart adds the release namespace                | The CNI plugin lets pods of these namespaces through without asking the Kubernetes API. The chart always adds the release namespace to the list, so the pre-install hook starts even on a node where a stopped agent with this list left the plugin behind, see [Troubleshooting](troubleshooting.md#installation-hangs-on-the-pre-install-hook). A list set in the values replaces `kube-system`, so keep it |
 | `seccompProfile.type` on `global.proxy`, `cni`, `istiod`, and `istiod.gateways`                    | `RuntimeDefault`                                                       | Keeps the istiod and gateway pods admissible under `restricted`. No effect on the admission of `istio-cni-node` or `ztunnel`, which need `privileged` regardless                                                                                                                                                                                         |
@@ -275,9 +275,9 @@ The values below are set by this chart; everything else keeps the vanilla defaul
 
 
 ### Gateway cluster filtering
-By default istiod sends every gateway the Envoy cluster of every port of every Service in the cluster, whether its routes use it or not. Gateway memory then grows with the cluster: see [the hardware sizing model](../internal/hardware-sizing-model.md#5-gateway-sizing).
+Without `istiod.env.PILOT_FILTER_GATEWAY_CLUSTER_CONFIG`, the istiod default, istiod sends every gateway the Envoy cluster of every port of every Service in the cluster, whether its routes use it or not. Gateway memory then grows with the cluster: see [the hardware sizing model](../internal/hardware-sizing-model.md#5-gateway-sizing).
 
-With `istiod.env.PILOT_FILTER_GATEWAY_CLUSTER_CONFIG: "true"`, a gateway gets only the clusters of:
+The chart sets the flag to `"true"`, and a gateway gets only the clusters of:
 
 - the backends of the routes attached to it,
 - the services of `meshConfig.extensionProviders`,
@@ -286,7 +286,7 @@ With `istiod.env.PILOT_FILTER_GATEWAY_CLUSTER_CONFIG: "true"`, a gateway gets on
 
 Waypoints are not affected: they get only the Services bound to them either way. The flag applies to every gateway this istiod serves, and is experimental upstream.
 
-Turning the flag on removes the clusters from the running gateways, but Envoy gives back only part of their memory. Restart the gateway pods afterwards to get the full effect:
+When the flag comes on in a running cluster, for example on an upgrade from a release without it, the running gateways drop the clusters, but Envoy gives back only part of their memory. Restart the gateway pods afterwards to get the full effect:
 
 ```bash
 kubectl rollout restart deployment <gateway>-istio -n <gateway namespace>
@@ -344,7 +344,7 @@ The annotation has to be on the `EnvoyFilter` that applies to the gateway, throu
 
 Services in `meshConfig.extensionProviders` need no annotation: istiod adds them by itself.
 
-To find the `EnvoyFilter`s that name a cluster, before turning the flag on:
+To find the `EnvoyFilter`s that name a cluster:
 
 ```bash
 kubectl get envoyfilter -A -o yaml | grep -n -E 'cluster_name|cluster: |outbound\|'
@@ -352,78 +352,11 @@ kubectl get envoyfilter -A -o yaml | grep -n -E 'cluster_name|cluster: |outbound
 
 Only a name of a cluster istiod builds for a Service, `outbound|<port>|<subset>|<hostname>`, is affected. A cluster that the `EnvoyFilter` adds itself (`applyTo: CLUSTER` with `operation: ADD`) is inserted into every update, full or incremental, and the flag does not filter it: such a filter needs no annotation. Its connections do not go through the mesh, though: they carry no mTLS, and the target rejects them where a `PeerAuthentication` puts it in `STRICT` mode.
 
-To check a gateway once the flag is on, the cluster has to be in its config, also after a route change:
+To check a gateway, the cluster has to be in its config, also after a route change:
 
 ```bash
 istioctl proxy-config cluster deploy/<gateway>-istio -n <gateway namespace> | grep '<hostname>'
 ```
-
-#### Istio 1.30.5 and earlier
-In these releases the annotation keeps the cluster only until the next route change: a change to any `HTTPRoute` or `VirtualService` in the cluster sends the gateways an incremental update without the annotated Services, and the cluster stays missing until the next full update, such as an `EnvoyFilter` change or an istiod restart ([istio/istio#62067](https://github.com/istio/istio/issues/62067), fixed upstream, in no release yet).
-
-So with such a release, while a gateway has an `EnvoyFilter` that names a cluster, either keep the flag off and size the gateway memory for all Services in the cluster, or turn it on and [pin the Service with a route](#pinning-a-service-with-a-route). Add the annotation either way: once a release with the fix is in place, the pins can go without touching the `EnvoyFilter`s.
-
-##### Pinning a Service with a route
-A route backend is kept by every update, incremental ones included. A route that points at the Service therefore keeps its cluster on the gateway, and an `AuthorizationPolicy` that denies the route's host keeps anyone from calling the Service through it. One pin per Service, attached to every gateway the `EnvoyFilter` targets:
-
-```yaml
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: pin-request-checker
-  namespace: checker
-spec:
-  parentRefs:
-    - name: public-gateway
-      namespace: istio-gateways
-    - name: private-gateway
-      namespace: istio-gateways
-  # A host nobody calls: .invalid is reserved and never resolves
-  hostnames:
-    - pin-request-checker.invalid
-  rules:
-    - backendRefs:
-        # The Service and the port of cluster_name: outbound|9000||request-checker.checker.svc.cluster.local
-        - name: request-checker
-          port: 9000
----
-apiVersion: security.istio.io/v1
-kind: AuthorizationPolicy
-metadata:
-  name: deny-pin-request-checker
-  namespace: istio-gateways
-spec:
-  targetRefs:
-    - group: gateway.networking.k8s.io
-      kind: Gateway
-      name: public-gateway
-    - group: gateway.networking.k8s.io
-      kind: Gateway
-      name: private-gateway
-  action: DENY
-  rules:
-    - to:
-        - operation:
-            hosts:
-              - pin-request-checker.invalid
-            # The ports of the gateways' HTTP and HTTPS listeners
-            ports:
-              - "80"
-              - "443"
-```
-
-- The route has to be accepted by every gateway in `parentRefs`. A listener takes routes only from the namespaces its `allowedRoutes` allows, by default its own: either allow the Service's namespace there, or put the route into the gateway's namespace and add a `ReferenceGrant` in the Service's namespace that lets `HTTPRoute`s from there refer to `Service`s.
-- A listener with a `hostname` accepts only routes whose host matches it. For such a listener use a host under its domain that nobody calls, for example `pin-request-checker.example.com` for `*.example.com`, and deny that host.
-- Without `ports` in the rule, a `DENY` rule on HTTP attributes alone denies all traffic of the gateway's TCP listeners, and istiod warns about it when the policy is applied. List the ports of the HTTP and HTTPS listeners, as in the `Gateway`'s `listeners[].port`.
-
-Check that the pin is in place: the route is accepted by each gateway, and the host answers `403`:
-
-```bash
-kubectl get httproute pin-request-checker -n checker -o jsonpath='{range .status.parents[*]}{.parentRef.name}: {.conditions[?(@.type=="Accepted")].status}{"\n"}{end}'
-curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: pin-request-checker.invalid' http://<gateway address>/
-```
-
-The integration test `tests/gateway-cluster-filter` checks this pin: with the annotation removed the cluster stays through route changes, and goes once the route is deleted.
 
 # Installation
 ## Before you begin
