@@ -17,6 +17,7 @@
   - [General parameters](#general-parameters)
   - [Istio parameters](#istio-parameters)
     - [What the distribution presets](#what-the-distribution-presets)
+    - [Gateway cluster filtering](#gateway-cluster-filtering)
 - [Installation](#installation)
   - [Before you begin](#before-you-begin)
   - [On-prem](#on-prem)
@@ -109,7 +110,7 @@ global:
 
 This value does three things:
 
-- The Istio [OpenShift profile](https://github.com/istio/istio/blob/1.30.5/manifests/helm-profiles/platform-openshift.yaml) puts the CNI plugin on the Multus paths, gives the agents the `spc_t` SELinux type, and makes the `cni` and `ztunnel` charts grant their service accounts the `privileged` SecurityContextConstraints.
+- The Istio [OpenShift profile](https://github.com/istio/istio/blob/1.30.6/manifests/helm-profiles/platform-openshift.yaml) puts the CNI plugin on the Multus paths, gives the agents the `spc_t` SELinux type, and makes the `cni` and `ztunnel` charts grant their service accounts the `privileged` SecurityContextConstraints.
 - istiod trusts ztunnel in `istio-system`. The profile points it at `kube-system`, where Istio installs ztunnel on OpenShift, and istiod issues no certificates to a ztunnel outside the trusted namespace. This distribution installs ztunnel in `istio-system`, so it sets `istiod.trustedZtunnelNamespace` to the release namespace itself. A value you set explicitly still takes precedence.
 - The Pod Security Admission hook is skipped, see [Pod Security Admission](#pod-security-admission-1).
 
@@ -156,7 +157,7 @@ global:
 
 This value does two things:
 
-- The Istio [GKE profile](https://github.com/istio/istio/blob/1.30.5/manifests/helm-profiles/platform-gke.yaml) makes the `cni` and `ztunnel` charts render ResourceQuotas for the `system-node-critical` priority class, which both agents run with. GKE admits such pods only into a namespace with that quota. Without it the DaemonSets create no pods: `insufficient quota to match these scopes`.
+- The Istio [GKE profile](https://github.com/istio/istio/blob/1.30.6/manifests/helm-profiles/platform-gke.yaml) makes the `cni` and `ztunnel` charts render ResourceQuotas for the `system-node-critical` priority class, which both agents run with. GKE admits such pods only into a namespace with that quota. Without it the DaemonSets create no pods: `insufficient quota to match these scopes`.
 - The CNI plugin goes to `/home/kubernetes/bin`, where GKE looks for it. The upstream chart picks that directory only when the Kubernetes version it renders for contains `-gke`. A render that does not see the real cluster version misses the suffix, such as `helm template` or a deployment tool that drops vendor suffixes from the version, so this distribution sets the directory for `gke` itself. To use another directory, set `cni.cni.cniBinDir`: the `gke` profile overrides the shorter `cni.cniBinDir`.
 
 Gateway API and Pod Security Admission need nothing beyond [Kubernetes](#kubernetes).
@@ -266,10 +267,96 @@ The values below are set by this chart; everything else keeps the vanilla defaul
 | `istiod.meshConfig.defaultConfig.gatewayTopology.numTrustedProxies`                                | `1`                                                                    | How many proxies sit in front of a gateway, which decides the client address a gateway reads from `X-Forwarded-For`. Set it to the real number of hops, otherwise the address is wrong                                                                                                                                                                   |
 | `istiod.gatewayClasses.istio.service.spec.type`                                                    | `ClusterIP`                                                            | Gateways created from the `istio` class get no cloud load balancer. Set `LoadBalancer` where one is wanted                                                                                                                                                                                                                                               |
 | `istiod.env.ISTIO_DUAL_STACK` and `istiod.meshConfig.defaultConfig.proxyMetadata.ISTIO_DUAL_STACK` | `"false"`                                                              | Dual-stack support. Both have to be changed together: the mesh config carries the flag into gateway pods, and only a restarted istiod reconciles existing gateways with it                                                                                                                                                                               |
+| `istiod.env.PILOT_FILTER_GATEWAY_CLUSTER_CONFIG`                                                   | `"true"`                                                               | `"true"` sends each gateway only the Envoy clusters of the Services it references, so gateway memory no longer grows with the number of Services in the cluster. An `EnvoyFilter` that calls a Service by cluster name needs the Service in its `envoyfilter.istio.io/referenced-services` annotation, see [Gateway cluster filtering](#gateway-cluster-filtering) |
 | `ztunnel.meshConfig.defaultConfig.proxyMetadata`                                                   | `ISTIO_META_DNS_CAPTURE: "true"`, `ISTIO_META_ROUTER_MODE: "sni-dnat"` | Proxy metadata the chart sets for ztunnel                                                                                                                                                                                                                                                                                                                |
 | `cni.excludeNamespaces`                                                                            | `kube-system`, and the chart adds the release namespace                | The CNI plugin lets pods of these namespaces through without asking the Kubernetes API. The chart always adds the release namespace to the list, so the pre-install hook starts even on a node where a stopped agent with this list left the plugin behind, see [Troubleshooting](troubleshooting.md#installation-hangs-on-the-pre-install-hook). A list set in the values replaces `kube-system`, so keep it |
 | `seccompProfile.type` on `global.proxy`, `cni`, `istiod`, and `istiod.gateways`                    | `RuntimeDefault`                                                       | Keeps the istiod and gateway pods admissible under `restricted`. No effect on the admission of `istio-cni-node` or `ztunnel`, which need `privileged` regardless                                                                                                                                                                                         |
 | `resources` on `cni`, `istiod`, `ztunnel`                                                          | see [HWE](#hwe)                                                        | Requests and limits for the three components                                                                                                                                                                                                                                                                                                             |
+
+
+### Gateway cluster filtering
+Without `istiod.env.PILOT_FILTER_GATEWAY_CLUSTER_CONFIG`, the istiod default, istiod sends every gateway the Envoy cluster of every port of every Service in the cluster, whether its routes use it or not. Gateway memory then grows with the cluster: see [the hardware sizing model](../internal/hardware-sizing-model.md#5-gateway-sizing).
+
+The chart sets the flag to `"true"`, and a gateway gets only the clusters of:
+
+- the backends of the routes attached to it,
+- the services of `meshConfig.extensionProviders`,
+- the JWKS hosts of the `RequestAuthentication` policies that apply to it,
+- the Services listed in the `envoyfilter.istio.io/referenced-services` annotation of the `EnvoyFilter`s that apply to it, see [EnvoyFilters that name a cluster](#envoyfilters-that-name-a-cluster).
+
+Waypoints are not affected: they get only the Services bound to them either way. The flag applies to every gateway this istiod serves, and is experimental upstream.
+
+When the flag comes on in a running cluster, for example on an upgrade from a release without it, the running gateways drop the clusters, but Envoy gives back only part of their memory. Restart the gateway pods afterwards to get the full effect:
+
+```bash
+kubectl rollout restart deployment <gateway>-istio -n <gateway namespace>
+```
+
+#### EnvoyFilters that name a cluster
+An `EnvoyFilter` that refers to an Envoy cluster by name, for example an HTTP filter that calls a service through `grpc_service.envoy_grpc.cluster_name`, works because istiod sends the gateway all clusters. No route of the gateway points at that Service, so with the flag on the cluster is no longer sent. Depending on the filter, Envoy either rejects the listener update, or accepts it and every call of the filter fails at request time; the filter's failure mode then decides whether requests pass without the filter or are rejected. The `EnvoyFilter` itself shows no error.
+
+If a route of one gateway already points at the same Service, that gateway still gets the cluster, and the problem shows only on the other gateways the `EnvoyFilter` targets.
+
+List the Service in the `envoyfilter.istio.io/referenced-services` annotation of the `EnvoyFilter`, and the gateway keeps the cluster with the flag on; size it as referencing that Service (see [the hardware sizing model](../internal/hardware-sizing-model.md#5-gateway-sizing)).
+
+The annotation lists the Service the cluster belongs to as `<namespace>/<hostname>`, several separated by commas:
+
+```yaml
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: request-check
+  namespace: istio-gateways
+  annotations:
+    # The Service behind cluster_name below: <namespace>/<hostname>
+    envoyfilter.istio.io/referenced-services: checker/request-checker.checker.svc.cluster.local
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: public-gateway
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: private-gateway
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+              subFilter:
+                name: envoy.filters.http.router
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.ext_proc
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+            grpc_service:
+              envoy_grpc:
+                # outbound|<port>||<hostname>: a cluster istiod builds for the Service
+                cluster_name: outbound|9000||request-checker.checker.svc.cluster.local
+```
+
+The annotation has to be on the `EnvoyFilter` that applies to the gateway, through `targetRefs` or `workloadSelector`, and name the same Service as `cluster_name`. istiod adds the Service to those gateways only.
+
+Services in `meshConfig.extensionProviders` need no annotation: istiod adds them by itself.
+
+To find the `EnvoyFilter`s that name a cluster:
+
+```bash
+kubectl get envoyfilter -A -o yaml | grep -n -E 'cluster_name|cluster: |outbound\|'
+```
+
+Only a name of a cluster istiod builds for a Service, `outbound|<port>|<subset>|<hostname>`, is affected. A cluster that the `EnvoyFilter` adds itself (`applyTo: CLUSTER` with `operation: ADD`) is inserted into every update, full or incremental, and the flag does not filter it: such a filter needs no annotation. Its connections do not go through the mesh, though: they carry no mTLS, and the target rejects them where a `PeerAuthentication` puts it in `STRICT` mode.
+
+To check a gateway, the cluster has to be in its config, also after a route change:
+
+```bash
+istioctl proxy-config cluster deploy/<gateway>-istio -n <gateway namespace> | grep '<hostname>'
+```
 
 # Installation
 ## Before you begin
