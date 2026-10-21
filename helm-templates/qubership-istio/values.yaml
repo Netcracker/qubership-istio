@@ -168,6 +168,33 @@ istiod:
       cpu: 400m
       memory: 1Gi
 
+  # Labels some deployment validators require on every Deployment, its pods, and its
+  # Service, on top of the app.kubernetes.io labels the upstream chart sets.
+  deploymentLabels:
+    name: istiod
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/technology: go
+  podLabels:
+    name: istiod
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/technology: go
+  # The upstream chart has no value for Service labels; tweak/istiod-service-labels/ adds it.
+  serviceLabels:
+    name: istiod
+
+  # The upstream chart gives the discovery container a readiness probe only;
+  # tweak/istiod-liveness-probe/ adds this one. It checks that istiod is up and
+  # listens on the port of its readiness probe, without depending on readiness
+  # itself, so istiod is not restarted while it waits for its config. Set to null to
+  # leave the container without a liveness probe.
+  livenessProbe:
+    tcpSocket:
+      port: 8080
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 20
+
 # ---------------------------------------------------------------------------
 # ztunnel — ztunnel DaemonSet (ambient mode L4 proxy)
 # ---------------------------------------------------------------------------

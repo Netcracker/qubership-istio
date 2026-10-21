@@ -1,0 +1,20 @@
+{{/*
+  The upstream istiod Service with serviceLabels added. The upstream template is rendered
+  and re-parsed rather than patched, so nothing is tied to an upstream line number.
+
+  Helm turns "<no value>" into an empty string only in the final output, not in an
+  included template, so the same replacement runs here before parsing. Without it a
+  quoted empty value, such as the PLATFORM variable, comes back as null.
+
+  A label the upstream chart sets keeps its value. An empty $svc.kind means the resource
+  scope or a remote istiod excluded the Service, and the original render is returned
+  unchanged.
+*/}}
+{{- $rendered := include "qubership.istiod-service-upstream" . | replace "<no value>" "" -}}
+{{- $svc := fromYaml $rendered -}}
+{{- if and $svc.kind .Values.serviceLabels -}}
+{{- $_ := set $svc.metadata "labels" (merge (dict) ($svc.metadata.labels | default dict) .Values.serviceLabels) -}}
+{{ toYaml $svc }}
+{{- else -}}
+{{ $rendered }}
+{{- end -}}
