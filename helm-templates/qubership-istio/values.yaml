@@ -14,6 +14,7 @@ global:
 
   # Default hub for Istio images.
   # The Istio 1.30 charts default to registry.istio.io/release, which Istio retires in December 2026.
+  # A parent chart that defines custom.docker.registry replaces it (tweak/custom-registry/).
   hub: docker.io/istio
 
   # Default tag for Istio images.
@@ -201,6 +202,7 @@ istiod:
 ztunnel:
   # Hub to pull from. Image will be `Hub/Image:Tag-Variant`
   # ztunnel reads only its own hub, not global.hub.
+  # A parent chart that defines custom.docker.registry replaces it (tweak/custom-registry/).
   hub: docker.io/istio
 
   # Tag to pull from. Image will be `Hub/Image:Tag-Variant`

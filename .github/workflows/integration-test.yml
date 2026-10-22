@@ -71,7 +71,7 @@ jobs:
       # Tests that only render templates need no cluster, so they run once here.
       - name: Run template tests
         run: |
-          for t in platform-defaults istiod-labels-probe; do
+          for t in platform-defaults istiod-labels-probe custom-registry; do
             bash tests/test-suite.sh ./helm-templates-extracted/qubership-istio "${t}"
           done
 
