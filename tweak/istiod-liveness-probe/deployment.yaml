@@ -7,23 +7,31 @@
   included template, so the same replacement runs here before parsing. Without it a
   quoted empty value, such as the PLATFORM variable, comes back as null.
 
+  The render is split into YAML documents, because fromYaml reads only the first one. Only
+  the Deployment is changed; any other document is kept as upstream renders it.
+
   A liveness probe the upstream chart sets itself is kept. An empty livenessProbe value
   leaves the container as upstream renders it, and so does an empty render: the resource
-  scope or a remote istiod excluded the Deployment. A render that does not parse fails, so
-  an upstream change cannot drop the probe unnoticed.
+  scope or a remote istiod excluded the Deployment. A document that does not parse fails
+  the render, so an upstream change cannot drop the probe unnoticed.
 */}}
-{{- $rendered := include "qubership.istiod-deployment-upstream" . | replace "<no value>" "" -}}
-{{- $deploy := fromYaml $rendered -}}
-{{- with $deploy.Error -}}
-{{- fail (printf "tweak/istiod-liveness-probe: the upstream istiod Deployment does not parse: %s" .) -}}
+{{- $docs := list -}}
+{{- range $doc := include "qubership.istiod-deployment-upstream" . | replace "<no value>" "" | splitList "\n---" -}}
+{{- if trim $doc -}}
+{{- $obj := fromYaml $doc -}}
+{{- with $obj.Error -}}
+{{- fail (printf "tweak/istiod-liveness-probe: the upstream istiod deployment.yaml does not parse: %s" .) -}}
 {{- end -}}
-{{- if and $deploy.kind .Values.livenessProbe -}}
-{{- range $container := $deploy.spec.template.spec.containers -}}
+{{- if and (eq (toString $obj.kind) "Deployment") $.Values.livenessProbe -}}
+{{- range $container := $obj.spec.template.spec.containers -}}
 {{- if and (eq $container.name "discovery") (not $container.livenessProbe) -}}
 {{- $_ := set $container "livenessProbe" $.Values.livenessProbe -}}
 {{- end -}}
 {{- end -}}
-{{ toYaml $deploy }}
+{{- $docs = append $docs (toYaml $obj) -}}
 {{- else -}}
-{{ $rendered }}
+{{- $docs = append $docs (trimPrefix "\n" $doc) -}}
 {{- end -}}
+{{- end -}}
+{{- end -}}
+{{ join "\n---\n" $docs }}

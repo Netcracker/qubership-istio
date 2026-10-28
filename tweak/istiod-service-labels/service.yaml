@@ -6,18 +6,26 @@
   included template, so the same replacement runs here before parsing. Without it a
   quoted empty value, such as the PLATFORM variable, comes back as null.
 
+  The render is split into YAML documents, because fromYaml reads only the first one. Only
+  the Service is changed; any other document is kept as upstream renders it.
+
   A label the upstream chart sets keeps its value. An empty render, when the resource
-  scope or a remote istiod excludes the Service, is returned unchanged. A render that does
-  not parse fails, so an upstream change cannot drop the labels unnoticed.
+  scope or a remote istiod excludes the Service, is returned unchanged. A document that
+  does not parse fails the render, so an upstream change cannot drop the labels unnoticed.
 */}}
-{{- $rendered := include "qubership.istiod-service-upstream" . | replace "<no value>" "" -}}
-{{- $svc := fromYaml $rendered -}}
-{{- with $svc.Error -}}
-{{- fail (printf "tweak/istiod-service-labels: the upstream istiod Service does not parse: %s" .) -}}
+{{- $docs := list -}}
+{{- range $doc := include "qubership.istiod-service-upstream" . | replace "<no value>" "" | splitList "\n---" -}}
+{{- if trim $doc -}}
+{{- $obj := fromYaml $doc -}}
+{{- with $obj.Error -}}
+{{- fail (printf "tweak/istiod-service-labels: the upstream istiod service.yaml does not parse: %s" .) -}}
 {{- end -}}
-{{- if and $svc.kind .Values.serviceLabels -}}
-{{- $_ := set $svc.metadata "labels" (merge (dict) ($svc.metadata.labels | default dict) .Values.serviceLabels) -}}
-{{ toYaml $svc }}
+{{- if and (eq (toString $obj.kind) "Service") $.Values.serviceLabels -}}
+{{- $_ := set $obj.metadata "labels" (merge (dict) ($obj.metadata.labels | default dict) $.Values.serviceLabels) -}}
+{{- $docs = append $docs (toYaml $obj) -}}
 {{- else -}}
-{{ $rendered }}
+{{- $docs = append $docs (trimPrefix "\n" $doc) -}}
 {{- end -}}
+{{- end -}}
+{{- end -}}
+{{ join "\n---\n" $docs }}
