@@ -1,0 +1,10 @@
+{{- /*
+  PAAS_PLATFORM: OPENSHIFT turns on global.platform: openshift where no platform is set.
+  Helm renders the deepest template path first, so this file runs before the subcharts,
+  whose values are the same maps as .Values.<subchart> here.
+*/ -}}
+{{- if eq (.Values.PAAS_PLATFORM | default "" | toString | upper) "OPENSHIFT" -}}
+{{- range $g := list .Values.global .Values.base.global .Values.cni.global .Values.istiod.global .Values.ztunnel.global -}}
+{{- if not $g.platform -}}{{- $_ := set $g "platform" "openshift" -}}{{- end -}}
+{{- end -}}
+{{- end -}}

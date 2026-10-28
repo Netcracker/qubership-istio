@@ -9,6 +9,8 @@ set -euo pipefail
 #   - gke: the CNI plugin goes to /home/kubernetes/bin without a -gke cluster version,
 #     also when only the cni chart sets the platform;
 #   - an explicit trusted ztunnel namespace still wins, and no platform keeps the old behavior.
+#   - PAAS_PLATFORM=OPENSHIFT from a deployer renders as global.platform=openshift, and an explicit
+#     platform still wins over it.
 
 RENDER_DIR="$(mktemp -d)"
 trap 'rm -rf "${RENDER_DIR}"' EXIT
@@ -82,3 +84,18 @@ render none
 expect "default trusted ztunnel" "$(trusted_ztunnel none)" "${ISTIO_NAMESPACE}/ztunnel"
 expect "default CNI binary directory" "$(cni_bin_dir none)" "/opt/cni/bin"
 [[ "$(patch_pss_count none)" -gt 0 ]] || fail "patch-pss resources missing without a platform"
+
+# --- 4. PAAS_PLATFORM from the deployer: OPENSHIFT stands for global.platform: openshift ---
+render paas-openshift --set PAAS_PLATFORM=OPENSHIFT
+cmp -s "${RENDER_DIR}/paas-openshift.yaml" "${RENDER_DIR}/openshift.yaml" \
+  || fail "PAAS_PLATFORM=OPENSHIFT renders differently from global.platform=openshift"
+notes --set PAAS_PLATFORM=OPENSHIFT | grep -q 'On OpenShift the istio-cni and ztunnel pods are admitted' \
+  || fail "release notes with PAAS_PLATFORM=OPENSHIFT do not describe OpenShift"
+
+render paas-kubernetes --set PAAS_PLATFORM=KUBERNETES
+cmp -s "${RENDER_DIR}/paas-kubernetes.yaml" "${RENDER_DIR}/none.yaml" \
+  || fail "PAAS_PLATFORM=KUBERNETES changes the render"
+
+render paas-openshift-gke --set PAAS_PLATFORM=OPENSHIFT --set global.platform=gke
+cmp -s "${RENDER_DIR}/paas-openshift-gke.yaml" "${RENDER_DIR}/gke.yaml" \
+  || fail "PAAS_PLATFORM=OPENSHIFT overrides an explicit global.platform"

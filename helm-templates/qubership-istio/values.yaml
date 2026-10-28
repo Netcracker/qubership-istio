@@ -257,6 +257,13 @@ monitoring:
 # Job itself would not be admitted.
 ENABLE_PRIVILEGED_PSS: true
 
+# ---------------------------------------------------------------------------
+# PAAS_PLATFORM - the platform of the cloud, as a deployer passes it
+# ---------------------------------------------------------------------------
+# OPENSHIFT sets global.platform: openshift where no platform is set, so a deployer
+# that passes it needs no global.platform. Other values change nothing.
+# PAAS_PLATFORM: ""
+
 patchPss:
   resources:
     requests:
