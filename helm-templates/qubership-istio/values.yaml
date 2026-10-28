@@ -169,8 +169,8 @@ istiod:
       cpu: 400m
       memory: 1Gi
 
-  # Labels some deployment validators require on every Deployment, its pods, and its
-  # Service, on top of the app.kubernetes.io labels the upstream chart sets.
+  # Labels a deployment validator requires on the istiod Deployment and its pods, on top of
+  # the app.kubernetes.io labels the upstream chart sets. On the Service it requires only name.
   deploymentLabels:
     name: istiod
     app.kubernetes.io/component: controller

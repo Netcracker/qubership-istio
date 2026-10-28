@@ -41,6 +41,8 @@ This distribution Helm chart has the following structure:
 
 The published chart carries the Istio subcharts with this distribution's changes from `tweak/` built into them, such as the image registry and the narrower `istiod` ClusterRole. Install and upgrade it as it is. `helm dependency update` and `helm dependency build` download the vanilla Istio subcharts again and replace the ones in the chart, so these changes are lost. This also applies to a deployment tool that runs either command before it installs.
 
+A chart that wraps this one can supply the image registry by defining the template `custom.docker.registry`. That registry replaces `global.hub` and the `hub` of `cni`, `istiod`, and `ztunnel`, including hubs set in the values, so with such a parent chart the registry cannot be changed through values.
+
 Qubership Istio should be installed under the service account with cluster-admin permissions in kubernetes.
 
 ## Kubernetes
