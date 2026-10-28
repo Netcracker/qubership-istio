@@ -6,12 +6,15 @@
   included template, so the same replacement runs here before parsing. Without it a
   quoted empty value, such as the PLATFORM variable, comes back as null.
 
-  A label the upstream chart sets keeps its value. An empty $svc.kind means the resource
-  scope or a remote istiod excluded the Service, and the original render is returned
-  unchanged.
+  A label the upstream chart sets keeps its value. An empty render, when the resource
+  scope or a remote istiod excludes the Service, is returned unchanged. A render that does
+  not parse fails, so an upstream change cannot drop the labels unnoticed.
 */}}
 {{- $rendered := include "qubership.istiod-service-upstream" . | replace "<no value>" "" -}}
 {{- $svc := fromYaml $rendered -}}
+{{- with $svc.Error -}}
+{{- fail (printf "tweak/istiod-service-labels: the upstream istiod Service does not parse: %s" .) -}}
+{{- end -}}
 {{- if and $svc.kind .Values.serviceLabels -}}
 {{- $_ := set $svc.metadata "labels" (merge (dict) ($svc.metadata.labels | default dict) .Values.serviceLabels) -}}
 {{ toYaml $svc }}

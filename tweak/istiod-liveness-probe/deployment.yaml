@@ -8,11 +8,15 @@
   quoted empty value, such as the PLATFORM variable, comes back as null.
 
   A liveness probe the upstream chart sets itself is kept. An empty livenessProbe value
-  leaves the container as upstream renders it, and so does an empty $deploy.kind: the
-  resource scope or a remote istiod excluded the Deployment.
+  leaves the container as upstream renders it, and so does an empty render: the resource
+  scope or a remote istiod excluded the Deployment. A render that does not parse fails, so
+  an upstream change cannot drop the probe unnoticed.
 */}}
 {{- $rendered := include "qubership.istiod-deployment-upstream" . | replace "<no value>" "" -}}
 {{- $deploy := fromYaml $rendered -}}
+{{- with $deploy.Error -}}
+{{- fail (printf "tweak/istiod-liveness-probe: the upstream istiod Deployment does not parse: %s" .) -}}
+{{- end -}}
 {{- if and $deploy.kind .Values.livenessProbe -}}
 {{- range $container := $deploy.spec.template.spec.containers -}}
 {{- if and (eq $container.name "discovery") (not $container.livenessProbe) -}}
