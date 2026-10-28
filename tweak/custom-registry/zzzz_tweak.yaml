@@ -3,8 +3,11 @@
   This is necessary when the current chart is included as a subchart — the real
   docker registry value cannot be known statically and must be calculated at deploy time
   by the parent chart's template logic.
+
+  The registry replaces global.hub and the chart's own hub: the qubership-istio values
+  set both to docker.io/istio, and merge would keep them. ztunnel reads only its own hub.
 */ -}}
 {{- $dockerRegistry := include "custom.docker.registry" . -}}
 {{- if $dockerRegistry -}}
-{{- $_ := merge .Values (dict "global" (dict "hub" $dockerRegistry)) -}}
+{{- $_ := mergeOverwrite .Values (dict "hub" $dockerRegistry "global" (dict "hub" $dockerRegistry)) -}}
 {{- end -}}

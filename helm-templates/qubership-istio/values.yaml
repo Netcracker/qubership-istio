@@ -14,6 +14,7 @@ global:
 
   # Default hub for Istio images.
   # The Istio 1.30 charts default to registry.istio.io/release, which Istio retires in December 2026.
+  # A parent chart that defines custom.docker.registry replaces it (tweak/custom-registry/).
   hub: docker.io/istio
 
   # Default tag for Istio images.
@@ -168,12 +169,40 @@ istiod:
       cpu: 400m
       memory: 1Gi
 
+  # Labels a deployment validator requires on the istiod Deployment and its pods, on top of
+  # the app.kubernetes.io labels the upstream chart sets. On the Service it requires only name.
+  deploymentLabels:
+    name: istiod
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/technology: go
+  podLabels:
+    name: istiod
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/technology: go
+  # The upstream chart has no value for Service labels; tweak/istiod-service-labels/ adds it.
+  serviceLabels:
+    name: istiod
+
+  # The upstream chart gives the discovery container a readiness probe only;
+  # tweak/istiod-liveness-probe/ adds this one. It checks that istiod is up and
+  # listens on the port of its readiness probe, without depending on readiness
+  # itself, so istiod is not restarted while it waits for its config. Set to null to
+  # leave the container without a liveness probe.
+  livenessProbe:
+    tcpSocket:
+      port: 8080
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 5
+
 # ---------------------------------------------------------------------------
 # ztunnel — ztunnel DaemonSet (ambient mode L4 proxy)
 # ---------------------------------------------------------------------------
 ztunnel:
   # Hub to pull from. Image will be `Hub/Image:Tag-Variant`
   # ztunnel reads only its own hub, not global.hub.
+  # A parent chart that defines custom.docker.registry replaces it (tweak/custom-registry/).
   hub: docker.io/istio
 
   # Tag to pull from. Image will be `Hub/Image:Tag-Variant`
@@ -227,6 +256,13 @@ monitoring:
 # and ztunnel: SecurityContextConstraints admit the agents there, and the hook
 # Job itself would not be admitted.
 ENABLE_PRIVILEGED_PSS: true
+
+# ---------------------------------------------------------------------------
+# PAAS_PLATFORM - the platform of the cloud, as a deployer passes it
+# ---------------------------------------------------------------------------
+# OPENSHIFT sets global.platform: openshift where no platform is set, so a deployer
+# that passes it needs no global.platform. Other values change nothing.
+# PAAS_PLATFORM: ""
 
 patchPss:
   resources:
