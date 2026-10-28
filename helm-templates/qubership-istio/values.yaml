@@ -194,7 +194,7 @@ istiod:
     initialDelaySeconds: 10
     periodSeconds: 10
     timeoutSeconds: 5
-    failureThreshold: 20
+    failureThreshold: 5
 
 # ---------------------------------------------------------------------------
 # ztunnel — ztunnel DaemonSet (ambient mode L4 proxy)
