@@ -114,7 +114,7 @@ A deployer that passes `PAAS_PLATFORM: OPENSHIFT` needs no such value: the chart
 
 This value does three things:
 
-- The Istio [OpenShift profile](https://github.com/istio/istio/blob/1.30.6/manifests/helm-profiles/platform-openshift.yaml) puts the CNI plugin on the Multus paths, gives the agents the `spc_t` SELinux type, and makes the `cni` and `ztunnel` charts grant their service accounts the `privileged` SecurityContextConstraints.
+- The Istio [OpenShift profile](https://github.com/istio/istio/blob/1.31.3/manifests/helm-profiles/platform-openshift.yaml) puts the CNI plugin on the Multus paths, gives the agents the `spc_t` SELinux type, and makes the `cni` and `ztunnel` charts grant their service accounts the `privileged` SecurityContextConstraints.
 - istiod trusts ztunnel in `istio-system`. The profile points it at `kube-system`, where Istio installs ztunnel on OpenShift, and istiod issues no certificates to a ztunnel outside the trusted namespace. This distribution installs ztunnel in `istio-system`, so it sets `istiod.trustedZtunnelNamespace` to the release namespace itself. A value you set explicitly still takes precedence.
 - The Pod Security Admission hook is skipped, see [Pod Security Admission](#pod-security-admission-1).
 
@@ -161,7 +161,7 @@ global:
 
 This value does two things:
 
-- The Istio [GKE profile](https://github.com/istio/istio/blob/1.30.6/manifests/helm-profiles/platform-gke.yaml) makes the `cni` and `ztunnel` charts render ResourceQuotas for the `system-node-critical` priority class, which both agents run with. GKE admits such pods only into a namespace with that quota. Without it the DaemonSets create no pods: `insufficient quota to match these scopes`.
+- The Istio [GKE profile](https://github.com/istio/istio/blob/1.31.3/manifests/helm-profiles/platform-gke.yaml) makes the `cni` and `ztunnel` charts render ResourceQuotas for the `system-node-critical` priority class, which both agents run with. GKE admits such pods only into a namespace with that quota. Without it the DaemonSets create no pods: `insufficient quota to match these scopes`.
 - The CNI plugin goes to `/home/kubernetes/bin`, where GKE looks for it. The upstream chart picks that directory only when the Kubernetes version it renders for contains `-gke`. A render that does not see the real cluster version misses the suffix, such as `helm template` or a deployment tool that drops vendor suffixes from the version, so this distribution sets the directory for `gke` itself. To use another directory, set `cni.cni.cniBinDir`: the `gke` profile overrides the shorter `cni.cniBinDir`.
 
 Gateway API and Pod Security Admission need nothing beyond [Kubernetes](#kubernetes).
