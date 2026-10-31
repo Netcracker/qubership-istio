@@ -90,4 +90,6 @@ Use it only to get out of a node that already refuses pods, or to keep there the
 * new pods of an enrolled namespace run outside the mesh for the seconds until the agent enrolls them, which is a hole in the mesh rather than a pause;
 * the host rules that keep kubelet probes out of the mesh are taken down with it.
 
+Turn it on only together with an update order that rolls `ztunnel` after the CNI agents. Otherwise a new pod can be enrolled by a restarted agent before any `ztunnel` on the node knows about it, and start without traffic. A `helm upgrade` applies the two DaemonSets together and orders nothing; the order is held only by a tool that reads sync waves, such as Argo CD, and was not verified there.
+
 Do not reach for `istioOwnedCNIConfig: true` instead. It does not make the agent clean up on an abnormal stop; it widens the branch that leaves the plugin behind, so an agent that fails for any reason now leaves the plugin where a default install would have removed it.
