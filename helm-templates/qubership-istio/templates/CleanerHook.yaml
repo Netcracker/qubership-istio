@@ -1,4 +1,4 @@
-{{- if .Values.cleanerHook.enabled }}
+{{- if and .Values.cleanerHook .Values.cleanerHook.enabled }}
 ---
 # Identity for the cleaner hook. The deployer's cleaner reads this name out of the CronJob's
 # pod template and asks the API for a token of it, so an empty one fails the whole clean.
@@ -106,7 +106,7 @@ spec:
           # Nothing privileged: this pod has to be admissible without the exemption that
           # the ambient agents need, and it only calls the API.
           securityContext:
-            {{- toYaml .Values.cleanerHook.podSecurityContext | nindent 12 }}
+            {{- toYaml (.Values.cleanerHook.podSecurityContext | default dict) | nindent 12 }}
           containers:
             - name: remove-webhooks
               image: {{ include "qubership.kubectl.image" . | quote }}
@@ -142,7 +142,6 @@ spec:
                     fi
                     echo "removing from ${kind}:"
                     echo "${found}"
-                    # shellcheck disable=SC2086
                     if ! echo "${found}" | xargs kubectl delete --ignore-not-found; then
                       failed=1
                     fi
@@ -152,9 +151,9 @@ spec:
                   # Istio webhooks, and a clean must not fail on it.
                   exit "${failed}"
               resources:
-                {{- toYaml .Values.cleanerHook.resources | nindent 16 }}
+                {{- toYaml (.Values.cleanerHook.resources | default dict) | nindent 16 }}
               securityContext:
-                {{- toYaml .Values.cleanerHook.containerSecurityContext | nindent 16 }}
+                {{- toYaml (.Values.cleanerHook.containerSecurityContext | default dict) | nindent 16 }}
               volumeMounts:
                 - name: tmp
                   mountPath: /tmp
