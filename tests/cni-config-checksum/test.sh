@@ -14,8 +14,8 @@ set -eux
 # ignore an environment variable they do not know, while EXCLUDE_NAMESPACES or a REPAIR_*
 # value changed mid-suite would move the node under the tests that follow.
 #
-# Nothing is left behind: the key is removed at the end, and the checksum is required to
-# come back to the value it had before the test started.
+# Nothing is left behind: the key is taken back out at the end, and the annotation is then
+# required to equal what the same render without the key computes.
 
 DS=istio-cni-node
 ANNOTATION=qubership.istio/istio-cni-config-checksum
@@ -119,10 +119,6 @@ echo "OK: no restart without a configuration change"
 echo "::endgroup::"
 
 echo "::group::the next change rolls them again"
-# helm --set cannot delete a key, so the suite ends with the probe key holding a second
-# value rather than gone. That is harmless: it reaches the container as an environment
-# variable the agents do not read, and the next upgrade of the release renders the
-# ConfigMap without it.
 upgrade_and_wait --set "cni.env.${PROBE_KEY}=two"
 SECOND_LIVE="$(live_checksum)"
 SECOND_REVISION="$(live_revision)"
