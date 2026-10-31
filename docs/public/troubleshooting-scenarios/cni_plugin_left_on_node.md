@@ -68,12 +68,26 @@ cni:
     - kube-system
 ```
 
-The agents read the list when they start, and changing the value does not restart them. After a change, restart them once:
-
-```bash
-kubectl rollout restart daemonset/istio-cni-node -n istio-system
-```
+The agents read the list when they start. The pod template of the DaemonSet carries a checksum of the `istio-cni-config` ConfigMap, so the agents restart automatically when the configuration changes and the new list reaches the nodes on the next upgrade.
 
 The list protects a node only if the agent that left the plugin there already had `istio-system` in its list. On a node left by an agent without it, the hook pod still fails, even when the new installation has the list. Install with the hook turned off, as described in [Installation hangs on the pre-install hook](../troubleshooting.md#installation-hangs-on-the-pre-install-hook), and the new agents repair the node.
 
 In short, `cni.excludeNamespaces` keeps the installation from deadlocking on the `istio-patch-pss` hook. It does not protect a node whose agent was killed while its DaemonSet still existed, and it protects nothing while no agent runs on the node: pods outside the list keep failing until an agent runs there again.
+
+## Last resort: AMBIENT_DISABLE_SAFE_UPGRADE
+
+`cni.env.AMBIENT_DISABLE_SAFE_UPGRADE: "true"` makes the agent remove the plugin on every shutdown, whatever its DaemonSet looks like:
+
+```yaml
+cni:
+  env:
+    AMBIENT_DISABLE_SAFE_UPGRADE: "true"
+```
+
+Use it only to get out of a node that already refuses pods, or to keep there the tooling that removes the agent pods before the DaemonSet. It is not a setting to install with:
+
+* the flag is undocumented upstream and marked in its source as something that will be removed in a future Istio release;
+* new pods of an enrolled namespace run outside the mesh for the seconds until the agent enrolls them, which is a hole in the mesh rather than a pause;
+* the host rules that keep kubelet probes out of the mesh are taken down with it.
+
+Do not reach for `istioOwnedCNIConfig: true` instead. It does not make the agent clean up on an abnormal stop; it widens the branch that leaves the plugin behind, so an agent that fails for any reason now leaves the plugin where a default install would have removed it.
