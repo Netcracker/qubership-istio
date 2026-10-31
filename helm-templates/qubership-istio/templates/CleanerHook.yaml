@@ -1,7 +1,7 @@
 {{- if and .Values.cleanerHook .Values.cleanerHook.enabled }}
 ---
-# Identity for the cleaner hook. The deployer's cleaner reads this name out of the CronJob's
-# pod template and asks the API for a token of it, so an empty one fails the whole clean.
+# Identity for the cleaner hook. A cleaner that reads the label below reads this name out of the
+# CronJob's pod template and asks the API for a token of it, so an empty one fails the whole clean.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -56,7 +56,7 @@ subjects:
     name: istio-cleaner-hook
     namespace: {{ .Release.Namespace }}
 ---
-# What the deployer's cleaner runs before it empties the namespace.
+# What a cleaner that reads the label below is meant to run before it empties the namespace.
 #
 # A Clean Install deletes the namespace's resources and leaves the cluster objects alone, so
 # the Istio webhook configurations survive it while the istiod service they call does not.
@@ -64,12 +64,16 @@ subjects:
 # cluster fails with `failed calling webhook "validation.istio.io"`, and a pod asking for
 # sidecar injection fails the same way. This hook takes the webhooks away first.
 #
-# The cleaner finds it by the app.kubernetes.io/name=cleaner label, reads the service account
-# from the pod template, and creates a Job of its own from that template rather than
-# triggering the CronJob, which is why `suspend` keeps the schedule from also firing.
+# The contract this relies on, read from a cleaner of the EnvGene deployment path: it selects the
+# CronJobs of the namespace being cleaned by the app.kubernetes.io/name=cleaner label, reads the
+# service account from the pod template, and creates a Job of its own from that template rather
+# than triggering the CronJob, which is why `suspend` keeps the schedule from also firing. No
+# clean run of our own deployer has been seen reading the label, so nothing here is a claim that
+# it does; where no cleaner reads it, this whole file is an unused ClusterRole and the webhook
+# configurations have to be deleted by hand.
 #
-# A Job that fails fails the whole clean, so the script tolerates webhooks that are not there
-# and exits non-zero only when a delete it attempted was refused.
+# Where a cleaner does read the label, a Job that fails fails the whole clean, so the script
+# tolerates webhooks that are not there and exits non-zero only when a delete was refused.
 apiVersion: batch/v1
 kind: CronJob
 metadata:

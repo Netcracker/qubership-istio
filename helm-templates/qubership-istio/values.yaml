@@ -307,14 +307,18 @@ patchPss:
 # every write of a *.istio.io resource in the cluster fails with `failed calling webhook
 # "validation.istio.io"`, and a pod asking for sidecar injection fails the same way.
 #
-# When enabled, the chart adds a CronJob labelled app.kubernetes.io/name=cleaner, which the
-# deployer's cleaner runs before it starts cleaning; it deletes the Istio webhook
-# configurations. The CronJob is suspended: the cleaner builds a Job of its own from its pod
-# template, and the schedule is there because the API requires one.
+# When enabled, the chart adds a CronJob labelled app.kubernetes.io/name=cleaner, which deletes
+# the Istio webhook configurations. The label is a contract with a cleaner, not a promise about
+# any particular deployer: a cleaner that reads it lists the CronJobs of the namespace it is
+# about to clean by that label, takes the service account and the pod template out of the one it
+# picks, and builds a Job of its own before it deletes anything. The CronJob is suspended so the
+# cron controller does not also fire it, and the schedule is there because the API requires one.
 #
 # Off by default. The role it needs — delete cluster-wide admission objects — is wider than
-# anything else in this chart, and it is only useful to a deployer that reads that label.
-# Turn it on where such a cleaner runs; elsewhere it is an idle ClusterRoleBinding.
+# anything else in this chart, and it is only useful to a cleaner that reads that label, which
+# has not been observed here. Turn it on where such a cleaner runs: elsewhere the Job is never
+# run and what stays is an idle ClusterRole, and where a cleaner does read the label a failed Job
+# fails that clean run with it. Where none does, delete the webhook configurations by hand.
 cleanerHook:
   enabled: false
 
