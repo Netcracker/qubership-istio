@@ -1,0 +1,165 @@
+{{- if .Values.cleanerHook.enabled }}
+---
+# Identity for the cleaner hook. The deployer's cleaner reads this name out of the CronJob's
+# pod template and asks the API for a token of it, so an empty one fails the whole clean.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: istio-cleaner-hook
+  labels:
+    app: qubership-istio
+    release: {{ .Release.Name }}
+    app.kubernetes.io/name: cleaner
+    app.kubernetes.io/part-of: qubership-istio
+    app.kubernetes.io/component: cleaner-hook
+{{- with .Values.global.imagePullSecrets }}
+imagePullSecrets:
+{{- range . }}
+  - name: {{ . }}
+{{- end }}
+{{- end }}
+---
+# Only the webhook objects, only what the script below names. No create or patch: this role
+# takes admission control away, it never installs any.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  # The namespace in the name: two releases in two namespaces must not share one binding.
+  name: istio-cleaner-hook-{{ .Release.Namespace }}
+  labels:
+    app: qubership-istio
+    release: {{ .Release.Name }}
+    app.kubernetes.io/name: cleaner
+    app.kubernetes.io/part-of: qubership-istio
+    app.kubernetes.io/component: cleaner-hook
+rules:
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["validatingwebhookconfigurations", "mutatingwebhookconfigurations"]
+    verbs: ["get", "list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: istio-cleaner-hook-{{ .Release.Namespace }}
+  labels:
+    app: qubership-istio
+    release: {{ .Release.Name }}
+    app.kubernetes.io/name: cleaner
+    app.kubernetes.io/part-of: qubership-istio
+    app.kubernetes.io/component: cleaner-hook
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: istio-cleaner-hook-{{ .Release.Namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: istio-cleaner-hook
+    namespace: {{ .Release.Namespace }}
+---
+# What the deployer's cleaner runs before it empties the namespace.
+#
+# A Clean Install deletes the namespace's resources and leaves the cluster objects alone, so
+# the Istio webhook configurations survive it while the istiod service they call does not.
+# For the minutes until the new istiod is ready, every write of a *.istio.io resource in the
+# cluster fails with `failed calling webhook "validation.istio.io"`, and a pod asking for
+# sidecar injection fails the same way. This hook takes the webhooks away first.
+#
+# The cleaner finds it by the app.kubernetes.io/name=cleaner label, reads the service account
+# from the pod template, and creates a Job of its own from that template rather than
+# triggering the CronJob, which is why `suspend` keeps the schedule from also firing.
+#
+# A Job that fails fails the whole clean, so the script tolerates webhooks that are not there
+# and exits non-zero only when a delete it attempted was refused.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: istio-cleaner-hook
+  labels:
+    app: qubership-istio
+    release: {{ .Release.Name }}
+    # What the cleaner selects on. It has to be on the CronJob, not on the pod template.
+    app.kubernetes.io/name: cleaner
+    app.kubernetes.io/part-of: qubership-istio
+    app.kubernetes.io/component: cleaner-hook
+spec:
+  # Required by the API. The cleaner never waits for a scheduled run.
+  schedule: "0 4 * * *"
+  suspend: true
+  jobTemplate:
+    spec:
+      # One attempt: the failures this can hit (no permission, webhook in use by a live
+      # istiod that will not be removed) do not get better on a second try, and a retry
+      # costs the clean the time it is allowed to take.
+      backoffLimit: 0
+      template:
+        metadata:
+          name: istio-cleaner-hook
+          labels:
+            app: qubership-istio
+            app.kubernetes.io/name: cleaner
+            app.kubernetes.io/part-of: qubership-istio
+            app.kubernetes.io/component: cleaner-hook
+        spec:
+          restartPolicy: Never
+          # The cleaner token-requests this account; an empty name breaks the clean.
+          serviceAccountName: istio-cleaner-hook
+          # Nothing privileged: this pod has to be admissible without the exemption that
+          # the ambient agents need, and it only calls the API.
+          securityContext:
+            {{- toYaml .Values.cleanerHook.podSecurityContext | nindent 12 }}
+          containers:
+            - name: remove-webhooks
+              image: {{ include "qubership.kubectl.image" . | quote }}
+              {{- with (.Values.global).imagePullPolicy }}
+              imagePullPolicy: {{ . }}
+              {{- end }}
+              env:
+                - name: NAMESPACE
+                  value: {{ .Release.Namespace | quote }}
+                # Image sets HOME=/ and the rootfs is read-only; point kubectl's cache at /tmp.
+                - name: HOME
+                  value: /tmp
+                - name: KUBECACHEDIR
+                  value: /tmp/.kube/cache
+              # The image's ENTRYPOINT is kubectl, so command must be a shell.
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -o nounset
+
+                  # The names Istio gives these objects, with the namespace in one of them.
+                  # Listed rather than deleted by exact name, so a webhook left under a
+                  # revision name is still found and a missing one is not an error.
+                  PATTERN="(istio-validator-${NAMESPACE}|istio-sidecar-injector|istiod-)"
+                  failed=0
+
+                  for kind in validatingwebhookconfigurations mutatingwebhookconfigurations; do
+                    found="$(kubectl get "${kind}" -o name 2>/dev/null | grep -E "${PATTERN}" || true)"
+                    if [ -z "${found}" ]; then
+                      echo "no ${kind} to remove"
+                      continue
+                    fi
+                    echo "removing from ${kind}:"
+                    echo "${found}"
+                    # shellcheck disable=SC2086
+                    if ! echo "${found}" | xargs kubectl delete --ignore-not-found; then
+                      failed=1
+                    fi
+                  done
+
+                  # An empty cluster is the normal case for a namespace that never held
+                  # Istio webhooks, and a clean must not fail on it.
+                  exit "${failed}"
+              resources:
+                {{- toYaml .Values.cleanerHook.resources | nindent 16 }}
+              securityContext:
+                {{- toYaml .Values.cleanerHook.containerSecurityContext | nindent 16 }}
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            # Only so readOnlyRootFilesystem and HOME=/tmp can coexist.
+            - name: tmp
+              emptyDir: {}
+{{- end }}
