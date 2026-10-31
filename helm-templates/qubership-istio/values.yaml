@@ -215,6 +215,14 @@ ztunnel:
   # If Image contains a "/", it will replace the entire `image` in the pod.
   # image: ztunnel
 
+  # Annotations to apply to all top level ztunnel resources, read by the ztunnel
+  # subchart (templates/daemonset.yaml, rbac.yaml, serviceaccount.yaml).
+  annotations:
+    # The wave means nothing to `helm upgrade`: Helm has no sync waves and rolls
+    # each workload on its own. Only Argo CD reads it, and it orders ztunnel
+    # after the istio-cni-node agents within one application.
+    argocd.argoproj.io/sync-wave: "1"
+
   meshConfig:
     defaultConfig:
       proxyMetadata:
