@@ -118,19 +118,31 @@ upgrade_and_wait --set "cni.env.${PROBE_KEY}=one"
 echo "OK: no restart without a configuration change"
 echo "::endgroup::"
 
-echo "::group::removing the value rolls them back"
-# helm --set cannot delete a key, only null it, so what comes back is the ConfigMap without
-# the value rather than the ConfigMap as it was. The checksum has to follow that exactly.
+echo "::group::the next change rolls them again"
+# helm --set cannot delete a key, so the suite ends with the probe key holding a second
+# value rather than gone. That is harmless: it reaches the container as an environment
+# variable the agents do not read, and the next upgrade of the release renders the
+# ConfigMap without it.
+upgrade_and_wait --set "cni.env.${PROBE_KEY}=two"
+SECOND_LIVE="$(live_checksum)"
+SECOND_REVISION="$(live_revision)"
+[ "${SECOND_LIVE}" == "${ENV_TWO}" ] ||
+  fail "the installed checksum after the second value is ${SECOND_LIVE}, expected ${ENV_TWO}"
+[ "${SECOND_REVISION}" != "${AFTER_REVISION}" ] ||
+  fail "${DS} kept revision ${AFTER_REVISION} when the value moved again"
+echo "OK: the checksum follows the content on every change"
+echo "::endgroup::"
+
+echo "::group::the value is taken back out"
+# helm cannot delete a key through --set except by nulling it, so what has to come back is
+# the ConfigMap as the same flags render it, and the assertion is against that render rather
+# than against a remembered checksum.
 upgrade_and_wait --set "cni.env.${PROBE_KEY}=null"
-RESTORED="$(live_checksum)"
-WANT_RESTORED="$(rendered_checksum --set "cni.env.${PROBE_KEY}=null")"
-[ "${RESTORED}" == "${WANT_RESTORED}" ] ||
-  fail "the installed checksum after removing the value is ${RESTORED}, expected ${WANT_RESTORED}"
-[ "$(live_revision)" != "${AFTER_REVISION}" ] ||
-  fail "${DS} kept revision ${AFTER_REVISION} after the value was removed"
-if kubectl -n "${ISTIO_NAMESPACE}" get configmap istio-cni-config \
-    -o jsonpath="{.data.${PROBE_KEY}}" | grep -q "one"; then
-  fail "istio-cni-config still carries ${PROBE_KEY}=one"
-fi
-echo "OK: the release is back where it started"
+WANT_REMOVED="$(rendered_checksum --set "cni.env.${PROBE_KEY}=null")"
+GOT_REMOVED="$(live_checksum)"
+[ "${GOT_REMOVED}" == "${WANT_REMOVED}" ] ||
+  fail "the installed checksum after removing the value is ${GOT_REMOVED}, expected ${WANT_REMOVED}"
+[ "$(live_revision)" != "${SECOND_REVISION}" ] ||
+  fail "${DS} kept revision ${SECOND_REVISION} when the value was taken out"
+echo "OK: the release carries no probe value left behind"
 echo "::endgroup::"
