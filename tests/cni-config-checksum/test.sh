@@ -15,7 +15,9 @@ set -eux
 # value changed mid-suite would move the node under the tests that follow.
 #
 # Nothing is left behind: the key is taken back out at the end, and the annotation is then
-# required to equal what the same render without the key computes.
+# required to equal what the ConfigMap looks like without it. Taking a value out of an
+# installed release is its own question, so the last step says which flags it upgrades with
+# and renders the same ones back, rather than comparing an upgrade with flags it never passed.
 
 DS=istio-cni-node
 ANNOTATION=qubership.istio/istio-cni-config-checksum
@@ -138,15 +140,36 @@ echo "OK: the checksum follows the content on every change"
 echo "::endgroup::"
 
 echo "::group::the value is taken back out"
-# helm cannot delete a key through --set except by nulling it, so what has to come back is
-# the ConfigMap as the same flags render it, and the assertion is against that render rather
-# than against a remembered checksum.
-upgrade_and_wait --set "cni.env.${PROBE_KEY}=null"
-WANT_REMOVED="$(rendered_checksum --set "cni.env.${PROBE_KEY}=null")"
+# What takes a value out of an installed release is re-supplying its values without it.
+# --reuse-values keeps the installed map, so --set <key>=null on its own leaves the value in
+# place, and the release would then be compared with a render that was never installed.
+# helm get values answers with exactly what --reuse-values would carry, so the upgrade below
+# is the release as it stands with one key less, and --reset-values makes it and the render
+# both read the chart defaults plus that file: MONITORING_ENABLED is passed to both, as
+# rendered_checksum always passes it.
+INSTALLED_VALUES="${RENDER_DIR}/installed-without-the-probe.yaml"
+helm get values "${HELM_RELEASE}" --namespace "${ISTIO_NAMESPACE}" -o yaml \
+  | yq e "del(.cni.env.${PROBE_KEY}) // {}" - > "${INSTALLED_VALUES}"
+cat "${INSTALLED_VALUES}"
+WITHOUT_PROBE=(--set MONITORING_ENABLED=false -f "${INSTALLED_VALUES}")
+
+helm upgrade "${HELM_RELEASE}" "${HELM_CHART_PATH}" \
+  --namespace "${ISTIO_NAMESPACE}" \
+  --timeout 3m \
+  --wait \
+  --reset-values \
+  "${WITHOUT_PROBE[@]}"
+kubectl -n "${ISTIO_NAMESPACE}" rollout status "daemonset/${DS}" --timeout=180s
+
+WANT_REMOVED="$(rendered_checksum "${WITHOUT_PROBE[@]}")"
 GOT_REMOVED="$(live_checksum)"
 [ "${GOT_REMOVED}" == "${WANT_REMOVED}" ] ||
   fail "the installed checksum after removing the value is ${GOT_REMOVED}, expected ${WANT_REMOVED}"
 [ "$(live_generation)" != "${SECOND_GENERATION}" ] ||
   fail "${DS} kept generation ${SECOND_GENERATION} when the value was taken out"
+if kubectl -n "${ISTIO_NAMESPACE}" get configmap istio-cni-config -o yaml \
+    | yq e ".data | has(\"${PROBE_KEY}\")" - | grep -q true; then
+  fail "istio-cni-config still carries ${PROBE_KEY}"
+fi
 echo "OK: the release carries no probe value left behind"
 echo "::endgroup::"
