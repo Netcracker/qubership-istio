@@ -36,12 +36,20 @@ rendered_checksum() {
 }
 
 live_checksum() {
-  kubectl -n "${ISTIO_NAMESPACE}" get daemonset "${DS}" \
-    -o jsonpath="{.spec.template.metadata.annotations['${ANNOTATION}']}"
+  # Read the same way rendered_checksum does. kubectl's jsonpath answers nothing to a key
+  # with dots written in brackets, so a key like this one reads back as an empty line;
+  # escaping the dots would work, but the yaml read below needs no escaping and matches
+  # what the render side does.
+  kubectl -n "${ISTIO_NAMESPACE}" get daemonset "${DS}" -o yaml > "${RENDER_DIR}/live.yaml"
+  yq e -N "select(.kind == \"DaemonSet\" and .metadata.name == \"${DS}\")
+            | .spec.template.metadata.annotations[\"${ANNOTATION}\"]" "${RENDER_DIR}/live.yaml"
 }
 
-live_revision() {
-  kubectl -n "${ISTIO_NAMESPACE}" get daemonset "${DS}" -o jsonpath='{.status.updateRevision}'
+# What distinguishes one rollout of the DaemonSet from the next. There is no
+# .status.updateRevision here, that belongs to a StatefulSet: metadata.generation grows on
+# every change of the spec and stays when nothing changed, which is what is asserted below.
+live_generation() {
+  kubectl -n "${ISTIO_NAMESPACE}" get daemonset "${DS}" -o jsonpath='{.metadata.generation}'
 }
 
 # Upgrade, and require the DaemonSet to roll on its own: nothing here runs rollout restart.
@@ -87,18 +95,18 @@ echo "::endgroup::"
 
 echo "::group::an installed release rolls on a configuration change alone"
 BEFORE_LIVE="$(live_checksum)"
-BEFORE_REVISION="$(live_revision)"
-echo "live checksum: ${BEFORE_LIVE}, revision: ${BEFORE_REVISION}"
+BEFORE_GENERATION="$(live_generation)"
+echo "live checksum: ${BEFORE_LIVE}, generation: ${BEFORE_GENERATION}"
 
 upgrade_and_wait --set "cni.env.${PROBE_KEY}=one"
 
 AFTER_LIVE="$(live_checksum)"
-AFTER_REVISION="$(live_revision)"
-echo "live checksum: ${AFTER_LIVE}, revision: ${AFTER_REVISION}"
+AFTER_GENERATION="$(live_generation)"
+echo "live checksum: ${AFTER_LIVE}, generation: ${AFTER_GENERATION}"
 [ "${AFTER_LIVE}" == "${ENV_ONE}" ] ||
   fail "the installed checksum is ${AFTER_LIVE}, expected ${ENV_ONE}"
-[ "${AFTER_REVISION}" != "${BEFORE_REVISION}" ] ||
-  fail "${DS} kept revision ${BEFORE_REVISION}: the agents were not restarted by the change"
+[ "${AFTER_GENERATION}" != "${BEFORE_GENERATION}" ] ||
+  fail "${DS} kept generation ${BEFORE_GENERATION}: the agents were not restarted by the change"
 # The same ConfigMap the annotation was computed from.
 kubectl -n "${ISTIO_NAMESPACE}" get configmap istio-cni-config \
   -o jsonpath="{.data.${PROBE_KEY}}" | grep -q "one" ||
@@ -113,19 +121,19 @@ echo "::group::the same configuration again rolls nothing"
 upgrade_and_wait --set "cni.env.${PROBE_KEY}=one"
 [ "$(live_checksum)" == "${AFTER_LIVE}" ] ||
   fail "an unchanged configuration changed the checksum to $(live_checksum)"
-[ "$(live_revision)" == "${AFTER_REVISION}" ] ||
-  fail "an unchanged configuration rolled ${DS} to $(live_revision)"
+[ "$(live_generation)" == "${AFTER_GENERATION}" ] ||
+  fail "an unchanged configuration rolled ${DS} to generation $(live_generation)"
 echo "OK: no restart without a configuration change"
 echo "::endgroup::"
 
 echo "::group::the next change rolls them again"
 upgrade_and_wait --set "cni.env.${PROBE_KEY}=two"
 SECOND_LIVE="$(live_checksum)"
-SECOND_REVISION="$(live_revision)"
+SECOND_GENERATION="$(live_generation)"
 [ "${SECOND_LIVE}" == "${ENV_TWO}" ] ||
   fail "the installed checksum after the second value is ${SECOND_LIVE}, expected ${ENV_TWO}"
-[ "${SECOND_REVISION}" != "${AFTER_REVISION}" ] ||
-  fail "${DS} kept revision ${AFTER_REVISION} when the value moved again"
+[ "${SECOND_GENERATION}" != "${AFTER_GENERATION}" ] ||
+  fail "${DS} kept generation ${AFTER_GENERATION} when the value moved again"
 echo "OK: the checksum follows the content on every change"
 echo "::endgroup::"
 
@@ -138,7 +146,7 @@ WANT_REMOVED="$(rendered_checksum --set "cni.env.${PROBE_KEY}=null")"
 GOT_REMOVED="$(live_checksum)"
 [ "${GOT_REMOVED}" == "${WANT_REMOVED}" ] ||
   fail "the installed checksum after removing the value is ${GOT_REMOVED}, expected ${WANT_REMOVED}"
-[ "$(live_revision)" != "${SECOND_REVISION}" ] ||
-  fail "${DS} kept revision ${SECOND_REVISION} when the value was taken out"
+[ "$(live_generation)" != "${SECOND_GENERATION}" ] ||
+  fail "${DS} kept generation ${SECOND_GENERATION} when the value was taken out"
 echo "OK: the release carries no probe value left behind"
 echo "::endgroup::"
