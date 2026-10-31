@@ -445,7 +445,17 @@ Remove Istio in this order. Do not delete the `istio-system` namespace or force-
    kubectl get pods -n istio-system
    ```
 
-5. If Istio is not coming back, delete its CRDs and the namespace. Deleting the CRDs deletes every Istio resource in the cluster:
+5. Remove the cluster-scoped objects that a namespaced release leaves behind. A tool that tracks only the namespace of the application does not delete them, and neither does deleting the namespace, so the webhook configurations keep pointing at a service that no longer exists and reject every write of an Istio resource in the cluster:
+
+   ```bash
+   kubectl get validatingwebhookconfigurations,mutatingwebhookconfigurations | grep -i istio
+   kubectl delete validatingwebhookconfiguration istio-validator-istio-system istiod-default-validator
+   kubectl delete mutatingwebhookconfiguration istio-sidecar-injector
+   ```
+
+   Delete by the names the first command prints; the ClusterRoles and ClusterRoleBindings of the release go the same way.
+
+6. If Istio is not coming back, delete its CRDs and the namespace. Deleting the CRDs deletes every Istio resource in the cluster:
 
    ```bash
    kubectl get crd -o name | grep '\.istio\.io$' | xargs kubectl delete
