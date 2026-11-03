@@ -1,78 +1,28 @@
 {{- if and .Values.cleanerHook .Values.cleanerHook.enabled }}
 ---
-# Identity for the cleaner hook. A cleaner that reads the label below reads this name out of the
-# CronJob's pod template and asks the API for a token of it, so an empty one fails the whole clean.
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: istio-cleaner-hook
-  labels:
-    app: qubership-istio
-    release: {{ .Release.Name }}
-    app.kubernetes.io/name: cleaner
-    app.kubernetes.io/part-of: qubership-istio
-    app.kubernetes.io/component: cleaner-hook
-{{- with .Values.global.imagePullSecrets }}
-imagePullSecrets:
-{{- range . }}
-  - name: {{ . }}
-{{- end }}
-{{- end }}
----
-# Only the webhook objects. No create or patch: this role takes admission control away, it
-# never installs any.
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  # The namespace in the name: two releases in two namespaces must not share one binding.
-  name: istio-cleaner-hook-{{ .Release.Namespace }}
-  labels:
-    app: qubership-istio
-    release: {{ .Release.Name }}
-    app.kubernetes.io/name: cleaner
-    app.kubernetes.io/part-of: qubership-istio
-    app.kubernetes.io/component: cleaner-hook
-rules:
-  - apiGroups: ["admissionregistration.k8s.io"]
-    resources: ["validatingwebhookconfigurations", "mutatingwebhookconfigurations"]
-    verbs: ["get", "list", "delete"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: istio-cleaner-hook-{{ .Release.Namespace }}
-  labels:
-    app: qubership-istio
-    release: {{ .Release.Name }}
-    app.kubernetes.io/name: cleaner
-    app.kubernetes.io/part-of: qubership-istio
-    app.kubernetes.io/component: cleaner-hook
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: istio-cleaner-hook-{{ .Release.Namespace }}
-subjects:
-  - kind: ServiceAccount
-    name: istio-cleaner-hook
-    namespace: {{ .Release.Namespace }}
----
 # What a cleaner that reads the label below is meant to run before it empties the namespace.
 #
 # A Clean Install deletes the namespace's resources and leaves the cluster objects alone, so
 # the Istio webhook configurations survive it while the istiod service they call does not.
 # For the minutes until the new istiod is ready, every write of a *.istio.io resource in the
 # cluster fails with `failed calling webhook "validation.istio.io"`, and a pod asking for
-# sidecar injection fails the same way. This hook takes the webhooks away first.
+# sidecar injection fails the same way. This hook switches those webhooks to
+# `failurePolicy: Ignore` first, so the API server lets such requests through while nothing
+# answers, and moves them off the istio.io/rev label that the live istiod reconciles by. The
+# next install applies the configurations from the chart, with the label and `Fail` again.
+#
+# The hook brings no RBAC of its own. It runs as the istiod service account, which the istiod
+# chart's istiod-webhook-rbac role already lets get and update exactly these configurations, by
+# name. That account may not delete them, which is why the hook updates rather than deletes.
 #
 # The contract this relies on: a cleaner selects the CronJobs of the namespace being cleaned by
 # the app.kubernetes.io/name=cleaner label, reads the service account from the pod template, and
 # creates a Job of its own from that template rather than triggering the CronJob, which is why
 # `suspend` keeps the schedule from also firing. It waits for the Job and only then deletes the
-# objects of the namespace. Where no cleaner reads the label, this whole file is an unused
-# ClusterRole and the webhook configurations have to be deleted by hand.
+# objects of the namespace. Where no cleaner reads the label, this file is an idle CronJob.
 #
 # Where a cleaner does read the label, a Job that fails fails the whole clean, so the script
-# tolerates webhooks that are not there and exits non-zero only when a list or a delete was
+# tolerates webhooks that are not there and exits non-zero only when a list or an update was
 # refused.
 apiVersion: batch/v1
 kind: CronJob
@@ -91,9 +41,9 @@ spec:
   suspend: true
   jobTemplate:
     spec:
-      # One attempt: the failures this can hit (no permission, webhook in use by a live
-      # istiod that will not be removed) do not get better on a second try, and a retry
-      # costs the clean the time it is allowed to take.
+      # One attempt: a refused list or update does not get better on a second try, and a
+      # retry costs the clean the time it is allowed to take. Write conflicts are retried
+      # inside the script.
       backoffLimit: 0
       template:
         metadata:
@@ -105,14 +55,15 @@ spec:
             app.kubernetes.io/component: cleaner-hook
         spec:
           restartPolicy: Never
-          # The cleaner token-requests this account; an empty name breaks the clean.
-          serviceAccountName: istio-cleaner-hook
+          # The cleaner token-requests this account; an empty name breaks the clean. The
+          # account and its rights come with the istiod chart.
+          serviceAccountName: istiod
           # Nothing privileged: this pod has to be admissible without the exemption that
           # the ambient agents need, and it only calls the API.
           securityContext:
             {{- toYaml (.Values.cleanerHook.podSecurityContext | default dict) | nindent 12 }}
           containers:
-            - name: remove-webhooks
+            - name: ignore-webhooks
               image: {{ include "qubership.kubectl.image" . | quote }}
               {{- with (.Values.global).imagePullPolicy }}
               imagePullPolicy: {{ . }}
@@ -150,11 +101,30 @@ spec:
                       echo "no ${kind} call a service in ${NAMESPACE}"
                       continue
                     fi
-                    echo "removing ${kind}: ${names}"
-                    # Unquoted on purpose: one argument per name.
-                    if ! kubectl delete "${kind}" ${names} --ignore-not-found; then
-                      failed=1
-                    fi
+                    # Unquoted on purpose: one word per name.
+                    for name in ${names}; do
+                      # istiod sets failurePolicy back to Fail on the validating webhooks it
+                      # watches, and it watches them by the istio.io/rev label: the same write
+                      # changes that label, so istiod leaves them be. A write conflicts when
+                      # istiod rewrites the CA bundle at the same moment, so the read and the
+                      # write are tried again together.
+                      updated=0
+                      for attempt in 1 2 3; do
+                        if kubectl get "${kind}" "${name}" -o json \
+                            | sed -e 's/"failurePolicy": "Fail"/"failurePolicy": "Ignore"/g' \
+                                  -e 's/"istio.io\/rev": "[^"]*"/"istio.io\/rev": "cleaner-hook"/' \
+                            | kubectl replace -f - >/dev/null; then
+                          updated=1
+                          break
+                        fi
+                        sleep 2
+                      done
+                      if [ "${updated}" = 1 ]; then
+                        echo "${kind}/${name}: failurePolicy Ignore, istio.io/rev cleaner-hook"
+                      else
+                        failed=1
+                      fi
+                    done
                   done
 
                   # An empty cluster is the normal case for a namespace that never held

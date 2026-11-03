@@ -300,25 +300,26 @@ patchPss:
         - ALL
 
 # ---------------------------------------------------------------------------
-# cleanerHook — what a deployer's clean run removes before it empties the namespace
+# cleanerHook — what a deployer's clean run does before it empties the namespace
 # ---------------------------------------------------------------------------
 # A Clean Install cleans the namespace and leaves the cluster objects alone, so the Istio
 # webhook configurations outlive the istiod service they call. Until a new istiod is ready,
 # every write of a *.istio.io resource in the cluster fails with `failed calling webhook
 # "validation.istio.io"`, and a pod asking for sidecar injection fails the same way.
 #
-# When enabled, the chart adds a CronJob labelled app.kubernetes.io/name=cleaner, which deletes
-# the webhook configurations that call a service in the release namespace. The label is a contract with a cleaner, not a promise about
-# any particular deployer: a cleaner that reads it lists the CronJobs of the namespace it is
-# about to clean by that label, takes the service account and the pod template out of the one it
-# picks, and builds a Job of its own before it deletes anything. The CronJob is suspended so the
-# cron controller does not also fire it, and the schedule is there because the API requires one.
+# When enabled, the chart adds a CronJob labelled app.kubernetes.io/name=cleaner, which switches
+# the webhook configurations that call a service in the release namespace to
+# `failurePolicy: Ignore`. The next install applies them from the chart with `Fail` again. The
+# label is a contract with a cleaner, not a promise about any particular deployer: a cleaner that
+# reads it lists the CronJobs of the namespace it is about to clean by that label, takes the
+# service account and the pod template out of the one it picks, and builds a Job of its own
+# before it deletes anything. The CronJob is suspended so the cron controller does not also fire
+# it, and the schedule is there because the API requires one.
 #
-# Off by default. The role it needs — delete cluster-wide admission objects — is wider than
-# anything else in this chart, and it is only useful to a cleaner that reads that label. Turn it
-# on where such a cleaner runs: elsewhere the Job is never run and what stays is an idle
-# ClusterRole, and where a cleaner does read the label a failed Job fails that clean run with it.
-# Where none does, delete the webhook configurations by hand.
+# No RBAC of its own: the Job runs as the istiod service account, which the istiod chart already
+# lets get and update these configurations by name. Off by default, because where a cleaner reads
+# the label, a failed Job fails that clean run with it. Where no cleaner reads it, the CronJob
+# stays idle, and the webhook configurations are deleted by hand as in the uninstall guide.
 cleanerHook:
   enabled: false
 
