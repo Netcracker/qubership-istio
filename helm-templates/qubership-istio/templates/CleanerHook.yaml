@@ -19,8 +19,8 @@ imagePullSecrets:
 {{- end }}
 {{- end }}
 ---
-# Only the webhook objects, only what the script below names. No create or patch: this role
-# takes admission control away, it never installs any.
+# Only the webhook objects. No create or patch: this role takes admission control away, it
+# never installs any.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -73,7 +73,8 @@ subjects:
 # configurations have to be deleted by hand.
 #
 # Where a cleaner does read the label, a Job that fails fails the whole clean, so the script
-# tolerates webhooks that are not there and exits non-zero only when a delete was refused.
+# tolerates webhooks that are not there and exits non-zero only when a list or a delete was
+# refused.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -132,21 +133,27 @@ spec:
                 - |
                   set -o nounset
 
-                  # The names Istio gives these objects, with the namespace in one of them.
-                  # Listed rather than deleted by exact name, so a webhook left under a
-                  # revision name is still found and a missing one is not an error.
-                  PATTERN="(istio-validator-${NAMESPACE}|istio-sidecar-injector|istiod-)"
+                  # A configuration is selected by the service it calls, not by its name:
+                  # once this namespace is emptied, nothing answers a webhook that calls a
+                  # service here. Another Istio installation in the cluster uses the same
+                  # names and calls its own namespace, so it is left alone. Only the first
+                  # webhook is read, because the JSONPath filter takes no wildcard there;
+                  # every webhook of an Istio configuration calls the same istiod.
+                  SELECT='{range .items[?(@.webhooks[0].clientConfig.service.namespace=="'"${NAMESPACE}"'")]}{.metadata.name}{" "}{end}'
                   failed=0
 
                   for kind in validatingwebhookconfigurations mutatingwebhookconfigurations; do
-                    found="$(kubectl get "${kind}" -o name 2>/dev/null | grep -E "${PATTERN}" || true)"
-                    if [ -z "${found}" ]; then
-                      echo "no ${kind} to remove"
+                    if ! names="$(kubectl get "${kind}" -o jsonpath="${SELECT}")"; then
+                      failed=1
                       continue
                     fi
-                    echo "removing from ${kind}:"
-                    echo "${found}"
-                    if ! echo "${found}" | xargs kubectl delete --ignore-not-found; then
+                    if [ -z "${names}" ]; then
+                      echo "no ${kind} call a service in ${NAMESPACE}"
+                      continue
+                    fi
+                    echo "removing ${kind}: ${names}"
+                    # Unquoted on purpose: one argument per name.
+                    if ! kubectl delete "${kind}" ${names} --ignore-not-found; then
                       failed=1
                     fi
                   done

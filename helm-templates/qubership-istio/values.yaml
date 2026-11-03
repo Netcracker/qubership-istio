@@ -308,7 +308,7 @@ patchPss:
 # "validation.istio.io"`, and a pod asking for sidecar injection fails the same way.
 #
 # When enabled, the chart adds a CronJob labelled app.kubernetes.io/name=cleaner, which deletes
-# the Istio webhook configurations. The label is a contract with a cleaner, not a promise about
+# the webhook configurations that call a service in the release namespace. The label is a contract with a cleaner, not a promise about
 # any particular deployer: a cleaner that reads it lists the CronJobs of the namespace it is
 # about to clean by that label, takes the service account and the pod template out of the one it
 # picks, and builds a Job of its own before it deletes anything. The CronJob is suspended so the
