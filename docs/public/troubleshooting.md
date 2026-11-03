@@ -43,6 +43,8 @@ Failed to create pod sandbox: rpc error: code = Unknown desc = failed to setup n
 
 The node has the Istio CNI plugin but no `istio-cni-node` agent to keep its credentials valid. This happens after Istio was removed by deleting the `istio-system` namespace or its pods, or when the agent cannot start on the node.
 
+A node that also lost the credentials file, for example after a reboot, fails with `failed (add): failed to createNewK8sClient: ... istio-cni-kubeconfig: no such file or directory` instead, and refuses the pods of `istio-system` too.
+
 As a solution, get the agent running on the node again: fix what keeps its pod from starting, or install Istio again if it was removed.
 
 For more information, see [CNI plugin left on a node](troubleshooting-scenarios/cni_plugin_left_on_node.md).

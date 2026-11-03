@@ -21,6 +21,14 @@ Pods on the node fail with:
 Failed to create pod sandbox: rpc error: code = Unknown desc = failed to setup network for sandbox "<id>": plugin type="istio-cni" name="istio-cni" failed (add): Unauthorized
 ```
 
+A node that also lost the kubeconfig, for example after a reboot, which empties `/var/run` and keeps `/etc/cni/net.d`, refuses every pod, those of the namespaces in `cni.excludeNamespaces` included:
+
+```text
+plugin type="istio-cni" name="istio-cni" failed (add): failed to createNewK8sClient: failed to setup client: stat /var/run/istio-cni/istio-cni-kubeconfig: no such file or directory
+```
+
+The plugin builds its Kubernetes client before it reads the exclusion list, so only the pods of the agent itself still start there.
+
 The last lines of the agent that left the plugin:
 
 ```text
@@ -48,7 +56,9 @@ Ambient node agent shutting down - should stop cleanup? true
    ```
 
    The agents start and repair the nodes. Then remove Istio as described in [Uninstall](../installation.md#uninstall).
-4. To repair a node without installing Istio, remove the `istio-cni` entry from the `plugins` list of the CNI configuration in `/etc/cni/net.d`, and delete `/var/run/istio-cni/istio-cni-kubeconfig`. A node debug pod uses the host network, so it starts on such a node:
+
+   On a node that fails with `failed to createNewK8sClient`, start with this step: the hook pod cannot start there, and the installation waits for it.
+4. To repair a node without installing Istio, first remove the `istio-cni` entry from the `plugins` list of the CNI configuration in `/etc/cni/net.d`, and only then delete `/var/run/istio-cni/istio-cni-kubeconfig`. Never delete the kubeconfig alone: the node then refuses every pod, as described in [Logging](#logging). A node debug pod uses the host network, so it starts on such a node:
 
    ```bash
    kubectl debug node/<node> -it --image=<image>
@@ -72,7 +82,7 @@ The agents read the list when they start. The pod template of the DaemonSet carr
 
 The list protects a node only if the agent that left the plugin there already had `istio-system` in its list. On a node left by an agent without it, the hook pod still fails, even when the new installation has the list. Install with the hook turned off, as described in [Installation hangs on the pre-install hook](../troubleshooting.md#installation-hangs-on-the-pre-install-hook), and the new agents repair the node.
 
-In short, `cni.excludeNamespaces` keeps the installation from deadlocking on the `istio-patch-pss` hook. It does not protect a node whose agent was killed while its DaemonSet still existed, and it protects nothing while no agent runs on the node: pods outside the list keep failing until an agent runs there again.
+In short, `cni.excludeNamespaces` keeps the installation from deadlocking on the `istio-patch-pss` hook. It does not protect a node whose agent was killed while its DaemonSet still existed, and it protects nothing while no agent runs on the node: pods outside the list keep failing until an agent runs there again. On a node without the kubeconfig the list is not read at all.
 
 ## Last resort: AMBIENT_DISABLE_SAFE_UPGRADE
 
@@ -86,10 +96,11 @@ cni:
 
 Use it only to get out of a node that already refuses pods, or to keep there the tooling that removes the agent pods before the DaemonSet. It is not a setting to install with:
 
-* the flag is undocumented upstream and marked in its source as something that will be removed in a future Istio release;
+* the flag came with Istio 1.25 as a way to opt out of the safe upgrade, it is not in the Istio reference documentation, and its source says it will be removed in a future release;
+* a removed flag is not an error: the agent ignores the variable and decides as it does by default. After every Istio upgrade, look for `AmbientDisableSafeUpgrade: true` in the configuration the agent logs at startup;
 * new pods of an enrolled namespace run outside the mesh for the seconds until the agent enrolls them, which is a hole in the mesh rather than a pause;
 * the host rules that keep kubelet probes out of the mesh are taken down with it.
 
-Turn it on only together with an update order that rolls `ztunnel` after the CNI agents. Otherwise a new pod can be enrolled by a restarted agent before any `ztunnel` on the node knows about it, and start without traffic. The chart sets `argocd.argoproj.io/sync-wave: "1"` on the ztunnel resources for that, through `ztunnel.annotations`, which the ztunnel subchart applies to all of its top level objects. A `helm upgrade` applies the two DaemonSets together and orders nothing: Helm has no sync waves, so the wave is read only by a tool that knows them, such as Argo CD. Whether Argo CD really brings `ztunnel` up after the CNI agents has still to be seen on a stand.
+Turn it on only together with an update order that rolls `ztunnel` after the CNI agents. Otherwise a new pod can be enrolled by a restarted agent before any `ztunnel` on the node knows about it, and start without traffic. The chart sets `argocd.argoproj.io/sync-wave: "1"` on the ztunnel resources for that, through `ztunnel.annotations`, which the ztunnel subchart applies to all of its top level objects. A `helm upgrade` applies the two DaemonSets together and orders nothing: Helm has no sync waves, so the wave is read only by a tool that knows them, such as Argo CD. Argo CD applies `ztunnel` only once every object of the earlier wave is healthy, so `ztunnel` follows the last CNI agent that becomes ready. The same rule holds `ztunnel` back for as long as any object of wave 0 stays unhealthy, for example a `HorizontalPodAutoscaler` in a cluster without a metrics server, and the sync does not finish.
 
 Do not reach for `istioOwnedCNIConfig: true` instead. It does not make the agent clean up on an abnormal stop; it widens the branch that leaves the plugin behind, so an agent that fails for any reason now leaves the plugin where a default install would have removed it.
