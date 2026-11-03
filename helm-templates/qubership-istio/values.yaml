@@ -315,10 +315,10 @@ patchPss:
 # cron controller does not also fire it, and the schedule is there because the API requires one.
 #
 # Off by default. The role it needs — delete cluster-wide admission objects — is wider than
-# anything else in this chart, and it is only useful to a cleaner that reads that label, which
-# has not been observed here. Turn it on where such a cleaner runs: elsewhere the Job is never
-# run and what stays is an idle ClusterRole, and where a cleaner does read the label a failed Job
-# fails that clean run with it. Where none does, delete the webhook configurations by hand.
+# anything else in this chart, and it is only useful to a cleaner that reads that label. Turn it
+# on where such a cleaner runs: elsewhere the Job is never run and what stays is an idle
+# ClusterRole, and where a cleaner does read the label a failed Job fails that clean run with it.
+# Where none does, delete the webhook configurations by hand.
 cleanerHook:
   enabled: false
 

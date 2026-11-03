@@ -64,13 +64,12 @@ subjects:
 # cluster fails with `failed calling webhook "validation.istio.io"`, and a pod asking for
 # sidecar injection fails the same way. This hook takes the webhooks away first.
 #
-# The contract this relies on, read from a cleaner of the EnvGene deployment path: it selects the
-# CronJobs of the namespace being cleaned by the app.kubernetes.io/name=cleaner label, reads the
-# service account from the pod template, and creates a Job of its own from that template rather
-# than triggering the CronJob, which is why `suspend` keeps the schedule from also firing. No
-# clean run of our own deployer has been seen reading the label, so nothing here is a claim that
-# it does; where no cleaner reads it, this whole file is an unused ClusterRole and the webhook
-# configurations have to be deleted by hand.
+# The contract this relies on: a cleaner selects the CronJobs of the namespace being cleaned by
+# the app.kubernetes.io/name=cleaner label, reads the service account from the pod template, and
+# creates a Job of its own from that template rather than triggering the CronJob, which is why
+# `suspend` keeps the schedule from also firing. It waits for the Job and only then deletes the
+# objects of the namespace. Where no cleaner reads the label, this whole file is an unused
+# ClusterRole and the webhook configurations have to be deleted by hand.
 #
 # Where a cleaner does read the label, a Job that fails fails the whole clean, so the script
 # tolerates webhooks that are not there and exits non-zero only when a list or a delete was
