@@ -66,7 +66,7 @@ no matches for kind "Gateway" in version "gateway.networking.k8s.io/v1"
 ```
 
 ### Pod Security Admission
-Istio Ambient Mesh requires privileged pods: `istio-cni` and `ztunnel` need `hostNetwork` together with the `NET_ADMIN` and `SYS_ADMIN` capabilities.
+Istio Ambient Mesh requires privileged pods: `istio-cni` and `ztunnel` mount directories of the node through `hostPath` and add capabilities. `istio-cni` adds `NET_ADMIN`, `NET_RAW`, `SYS_PTRACE`, `SYS_ADMIN` and `DAC_OVERRIDE`; `ztunnel` adds `NET_ADMIN`, `SYS_ADMIN` and `NET_RAW`. Neither needs `hostNetwork`.
 If Pod Security Admission enforces `baseline` or `restricted` on `istio-system`, both DaemonSets are created but their pods are rejected at admission.
 To be able to install the distro you need to provide `privileged` policy to `istio-system` namespace as prerequisite step.
 
@@ -97,6 +97,34 @@ global:
   kubectl:
     registry: <registry>
 ```
+
+### Container hardening
+The agents cannot meet every container hardening requirement, because ambient needs root, added capabilities and `hostPath` volumes. The chart sets what can be set and leaves the rest as it is, so that a hardening check lists the rest as exceptions to approve, not as defects to fix.
+
+The chart puts `cni.containerSecurityContext` and `ztunnel.containerSecurityContext` on top of the `securityContext` of the main container of each agent (`install-cni` in `istio-cni-node`, `istio-proxy` in `ztunnel`). After that every container has `allowPrivilegeEscalation: false`, `drop: ALL`, `seccompProfile: RuntimeDefault` and `readOnlyRootFilesystem: true`:
+
+| Container | Already set | Added by `containerSecurityContext` |
+|---|---|---|
+| `install-cni` | `drop: ALL`, `seccompProfile: RuntimeDefault` | `allowPrivilegeEscalation: false`, `readOnlyRootFilesystem: true` |
+| `istio-proxy` (`ztunnel`) | `drop: ALL`, `readOnlyRootFilesystem: true` | `allowPrivilegeEscalation: false`, `seccompProfile: RuntimeDefault` |
+| `node-inotify-tuning` | `allowPrivilegeEscalation: false`, `drop: ALL`, `readOnlyRootFilesystem: true`, `seccompProfile: RuntimeDefault` | nothing to add |
+
+**`allowPrivilegeEscalation: false` closes the check on paper only for `install-cni` and `istio-proxy`.** The value turns on `no_new_privs`, but both containers hold `SYS_ADMIN`, and [Kubernetes documents](https://kubernetes.io/docs/tasks/configure-pod-container/security-context/) that a container with `CAP_SYS_ADMIN`, or a privileged one, can escalate privileges whatever this field says. This is why the upstream `ztunnel` chart sets `true`. The real boundary for these two containers is the exception for added capabilities, not this field. To go back to the upstream value, set `<chart>.containerSecurityContext.allowPrivilegeEscalation` to `true`, with `<chart>` being `cni` or `ztunnel`.
+
+What cannot be set, and why:
+
+| Container | Left as it is | Why |
+|---|---|---|
+| `install-cni` | Runs as root (`runAsUser: 0`) and adds `DAC_OVERRIDE` | It writes the plugin and its configuration to `/opt/cni/bin` and `/etc/cni/net.d` |
+| `install-cni` | Adds `SYS_ADMIN` and `SYS_PTRACE` | It opens the network namespace of a pod through `/proc` |
+| `install-cni` | Adds `NET_ADMIN` and `NET_RAW` | It sets up the traffic redirection rules |
+| `install-cni` | `hostPath` volumes `/opt/cni/bin`, `/etc/cni/net.d`, `/proc` (read only), `/var/run/netns`, `/var/run/istio-cni`, `/var/run/ztunnel` | The first two hold the plugin and its configuration, `/proc` and `/var/run/netns` give access to pod namespaces, `/var/run/istio-cni` is the socket between the plugin and the agent, and `/var/run/ztunnel` hands the namespace over to `ztunnel` |
+| `istio-proxy` (`ztunnel`) | Runs as root (`runAsUser: 0`) and adds `SYS_ADMIN` | It enters the network namespace of a pod with `setns` |
+| `istio-proxy` (`ztunnel`) | Adds `NET_ADMIN` and `NET_RAW` | It uses `TPROXY` |
+| `istio-proxy` (`ztunnel`) | `hostPath` volume `/var/run/ztunnel` | It receives the pod namespaces from `install-cni` |
+| `node-inotify-tuning` | Runs as root (`runAsUser: 0`), `hostPath` volume `/proc/sys/fs/inotify` | It writes the node's inotify limits, and the files belong to `root:root` |
+
+Set `global.nodeTuning.enabled` to `false` to remove `node-inotify-tuning` and its volume where the nodes already have the inotify limits, see [General parameters](#general-parameters).
 
 ## OpenShift
 Supported versions: 4.19 to 4.22, the OpenShift releases built on the [supported Kubernetes versions](#kubernetes), from 1.32 in 4.19 to 1.35 in 4.22.
@@ -237,7 +265,7 @@ Every parameter on this page, the Istio ones included, is a top-level key of the
 | global.nodeTuning.inotify.maxUserWatches   | integer | no        | `65536`                                                                        | Target value for `fs.inotify.max_user_watches`                                                                                                                                                                                                                                                                                                      |
 
 The init container writes to `/proc/sys/fs/inotify` through a `hostPath` mount, so it runs as root
-on the node. The `privileged` policy this distribution already requires on `istio-system` covers that.
+on the node. The `privileged` policy this distribution already requires on `istio-system` covers that. For what else the agents need from the node, see [Container hardening](#container-hardening).
 
 A limit is raised only when the node sits below the target, so a node tuned higher keeps its own
 value. The container never fails the pod. Neither DaemonSet sets `updateStrategy`, so both roll at
@@ -279,6 +307,8 @@ The values below are set by this chart; everything else keeps the vanilla defaul
 | `ztunnel.meshConfig.defaultConfig.proxyMetadata`                                                   | `ISTIO_META_DNS_CAPTURE: "true"`, `ISTIO_META_ROUTER_MODE: "sni-dnat"` | Proxy metadata the chart sets for ztunnel                                                                                                                                                                                                                                                                                                                |
 | `cni.excludeNamespaces`                                                                            | `kube-system`, and the chart adds the release namespace                | The CNI plugin lets pods of these namespaces through without asking the Kubernetes API. The chart always adds the release namespace to the list, so the pre-install hook starts even on a node where a stopped agent with this list left the plugin behind, see [Troubleshooting](troubleshooting.md#installation-hangs-on-the-pre-install-hook). A list set in the values replaces `kube-system`, so keep it |
 | `seccompProfile.type` on `global.proxy`, `cni`, `istiod`, and `istiod.gateways`                    | `RuntimeDefault`                                                       | Keeps the istiod and gateway pods admissible under `restricted`. No effect on the admission of `istio-cni-node` or `ztunnel`, which need `privileged` regardless                                                                                                                                                                                         |
+| `cni.containerSecurityContext`                                                                     | `allowPrivilegeEscalation: false`, `readOnlyRootFilesystem: true`      | Put on top of the upstream `securityContext` of the `install-cni` container, key by key. Set a key back to undo it, for example `cni.containerSecurityContext.readOnlyRootFilesystem: false`; `null` for the whole value leaves the container as upstream renders it, see [Container hardening](#container-hardening) |
+| `ztunnel.containerSecurityContext`                                                                 | `allowPrivilegeEscalation: false`, `seccompProfile.type: RuntimeDefault` | Put on top of the upstream `securityContext` of the `istio-proxy` container, key by key. Set a key back to undo it, for example `ztunnel.containerSecurityContext.allowPrivilegeEscalation: true`; `null` for the whole value leaves the container as upstream renders it, see [Container hardening](#container-hardening) |
 | `resources` on `cni`, `istiod`, `ztunnel`                                                          | see [HWE](#hwe)                                                        | Requests and limits for the three components                                                                                                                                                                                                                                                                                                             |
 
 

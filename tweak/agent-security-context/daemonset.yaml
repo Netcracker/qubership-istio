@@ -1,0 +1,50 @@
+{{/*
+  The @CHART@ DaemonSet with the securityContext of its @CONTAINER@ container set from the
+  containerSecurityContext value. The DaemonSet rendered so far is parsed again rather than
+  patched, so nothing is tied to an upstream line number. Upstream hardcodes some of these
+  keys, such as allowPrivilegeEscalation: true on istio-proxy, so no value of the chart
+  reaches them.
+
+  Every top-level key of the value is put into the container's securityContext, on top of
+  what upstream renders. Only the top level is replaced: a nested object such as
+  seccompProfile or capabilities replaces the upstream one whole, it is not merged into it.
+  Keys the value does not name stay as upstream renders them. A key set to null leaves the
+  upstream value in place.
+
+  mergeOverwrite is not used: it does not overwrite true with false, so the upstream
+  allowPrivilegeEscalation: true would stay.
+
+  Helm turns "<no value>" into an empty string only in the final output, not in an
+  included template, so the same replacement runs here before parsing.
+
+  An empty $ds.kind means the resource scope excluded this chart, and an empty
+  containerSecurityContext means nothing is asked for. Either way the render so far is
+  returned unchanged. A render that does not parse, or has no @CONTAINER@ container, fails:
+  an upstream rename must not drop the hardening unnoticed.
+*/}}
+{{- $rendered := include "qubership.@CHART@-daemonset-pre-security-context" . | replace "<no value>" "" -}}
+{{- $ds := fromYaml $rendered -}}
+{{- with $ds.Error -}}
+{{- fail (printf "tweak/agent-security-context: the @CHART@ daemonset.yaml does not parse: %s" .) -}}
+{{- end -}}
+{{- if and $ds.kind .Values.containerSecurityContext -}}
+{{- $found := false -}}
+{{- range $container := $ds.spec.template.spec.containers -}}
+{{- if eq $container.name "@CONTAINER@" -}}
+{{- $found = true -}}
+{{- $sc := $container.securityContext | default dict -}}
+{{- range $key, $value := $.Values.containerSecurityContext -}}
+{{- if not (kindIs "invalid" $value) -}}
+{{- $_ := set $sc $key $value -}}
+{{- end -}}
+{{- end -}}
+{{- $_ := set $container "securityContext" $sc -}}
+{{- end -}}
+{{- end -}}
+{{- if not $found -}}
+{{- fail "tweak/agent-security-context: the @CHART@ DaemonSet has no container named @CONTAINER@, so containerSecurityContext cannot be applied" -}}
+{{- end -}}
+{{ toYaml $ds }}
+{{- else -}}
+{{ $rendered }}
+{{- end -}}

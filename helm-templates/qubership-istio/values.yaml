@@ -83,6 +83,18 @@ cni:
   seccompProfile:
     type: RuntimeDefault
 
+  # Put on top of the upstream securityContext of the install-cni container
+  # (tweak/agent-security-context/). Upstream sets neither key. Only top-level keys
+  # are replaced, and a key set to null keeps the upstream value. Root, the added
+  # capabilities and the hostPath volumes stay, because ambient needs them. With
+  # SYS_ADMIN, allowPrivilegeEscalation is allowed whatever this says; false sets
+  # no_new_privs. To undo a key, set it back, for example
+  # cni.containerSecurityContext.readOnlyRootFilesystem: false. Set the whole value
+  # to null to leave the container as upstream renders it.
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+
   # The CNI plugin lets pods of these namespaces through before it asks the
   # Kubernetes API, and never enrolls them in the mesh. The chart always adds
   # the release namespace to this list (tweak/cni-exclude-release-namespace):
@@ -229,6 +241,20 @@ ztunnel:
       cpu: 400m
       memory: 512Mi
 
+  # Put on top of the upstream securityContext of the istio-proxy container
+  # (tweak/agent-security-context/). Upstream hardcodes allowPrivilegeEscalation: true
+  # and sets no seccompProfile. Only top-level keys are replaced, so seccompProfile
+  # is replaced whole, and a key set to null keeps the upstream value. Root, the
+  # added capabilities and the hostPath volumes stay, because ambient needs them.
+  # With SYS_ADMIN, allowPrivilegeEscalation is allowed whatever this says; false
+  # sets no_new_privs. To undo a key, set it back, for example
+  # ztunnel.containerSecurityContext.allowPrivilegeEscalation: true. Set the whole
+  # value to null to leave the container as upstream renders it.
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    seccompProfile:
+      type: RuntimeDefault
+
 # ---------------------------------------------------------------------------
 # monitoring — PodMonitor, ServiceMonitor and the Grafana dashboards
 # ---------------------------------------------------------------------------
@@ -239,8 +265,9 @@ monitoring:
 # ---------------------------------------------------------------------------
 # pre-deploy — namespace Pod Security Standards patch
 # ---------------------------------------------------------------------------
-# Istio ambient requires privileged pods (istio-cni needs hostNetwork plus
-# NET_ADMIN/SYS_ADMIN; ztunnel needs the same). Where Pod Security Admission
+# Istio ambient requires privileged pods: istio-cni and ztunnel mount directories of
+# the node through hostPath and add capabilities (NET_ADMIN, SYS_ADMIN and more).
+# hostNetwork is not what they need. Where Pod Security Admission
 # enforces "baseline" or "restricted" on this namespace, those DaemonSets are
 # accepted as objects but their pods are rejected, leaving no data plane.
 #
