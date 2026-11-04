@@ -55,12 +55,14 @@ expect_hardened() {
   expect "${r}: istio-proxy runAsGroup" "$(proxy "${r}" '.securityContext.runAsGroup')" "1337"
 }
 
+# One name per line from yq, joined with commas. An expression that builds an array would
+# print once for every document of the render that is not the DaemonSet, so none does.
 init_names() {
-  pod_spec "$1" "$2" '[.initContainers[]?.name] | join(",")'
+  pod_spec "$1" "$2" '.initContainers[]?.name' | paste -sd, -
 }
 
 node_inotify_volumes() {
-  pod_spec "$1" "$2" '[.volumes[] | select(.name == "node-inotify")] | length'
+  pod_spec "$1" "$2" '.volumes[] | select(.name == "node-inotify") | .name' | wc -l | tr -d ' '
 }
 
 # --- 1. Defaults ---
