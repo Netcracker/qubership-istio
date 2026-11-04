@@ -15,6 +15,8 @@ bash "${SCRIPT_DIR}/cni-exclude-release-namespace/apply.sh" "${CHARTS_DIR}"
 bash "${SCRIPT_DIR}/custom-registry/apply.sh" "${CHARTS_DIR}"
 bash "${SCRIPT_DIR}/istiod-rbac/apply.sh" "${CHARTS_DIR}"
 bash "${SCRIPT_DIR}/node-inotify/apply.sh" "${CHARTS_DIR}"
+# Wraps the DaemonSet node-inotify wrote, so it has to run right after it.
+bash "${SCRIPT_DIR}/agent-security-context/apply.sh" "${CHARTS_DIR}"
 bash "${SCRIPT_DIR}/gke-cni-bin-dir/apply.sh" "${CHARTS_DIR}"
 bash "${SCRIPT_DIR}/openshift-trusted-ztunnel/apply.sh" "${CHARTS_DIR}"
 bash "${SCRIPT_DIR}/istiod-service-labels/apply.sh" "${CHARTS_DIR}"
