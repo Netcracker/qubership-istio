@@ -316,10 +316,21 @@ patchPss:
 # before it deletes anything. The CronJob is suspended so the cron controller does not also fire
 # it, and the schedule is there because the API requires one.
 #
-# No RBAC of its own: the Job runs as the istiod service account, which the istiod chart already
-# lets get and update these configurations by name. Off by default, because where a cleaner reads
-# the label, a failed Job fails that clean run with it. Where no cleaner reads it, the CronJob
-# stays idle, and the webhook configurations are deleted by hand as in the uninstall guide.
+# No RBAC of its own: the Job runs as the istiod service account, which comes with the istiod
+# subchart. Its rights come from the istiod-webhook-rbac role of this chart (tweak/istiod-rbac/,
+# which narrows the webhook rules of the upstream istiod-clusterrole), and the role lets it get
+# and update these configurations by name. Off by default, because where a cleaner reads the
+# label, a failed Job fails that clean run with it. Where no cleaner reads it, the CronJob stays
+# idle, and the webhook configurations are deleted by hand as in the uninstall guide.
+#
+# Where the hook does not fit, the Job fails and the clean stops before anything is deleted, a
+# refusal that damages nothing. Three cases:
+# - The selection holds a configuration the role does not name: a tag made by `istioctl tag set`
+#   outside these values, the injector of a second revision, or a foreign configuration that
+#   calls a service in this namespace. Remove it, or set it to `Ignore`, before the clean.
+# - A release with `revision` set: the service account is fixed to `istiod`.
+# - The release namespace is not global.istioNamespace, or global.resourceScope is not `all` or
+#   `cluster`: the role is not rendered.
 cleanerHook:
   enabled: false
 

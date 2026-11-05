@@ -11,8 +11,9 @@
 # answers, and moves them off the istio.io/rev label that the live istiod reconciles by. The
 # next install applies the configurations from the chart, with the label and `Fail` again.
 #
-# The hook brings no RBAC of its own. It runs as the istiod service account, which the istiod
-# chart's istiod-webhook-rbac role already lets get and update exactly these configurations, by
+# The hook brings no RBAC of its own. It runs as the istiod service account, which the
+# istiod-webhook-rbac role of this chart (tweak/istiod-rbac/, which narrows the webhook rules of
+# the upstream istiod-clusterrole) already lets get and update exactly these configurations, by
 # name. That account may not delete them, which is why the hook updates rather than deletes.
 #
 # The contract this relies on: a cleaner selects the CronJobs of the namespace being cleaned by
@@ -56,7 +57,8 @@ spec:
         spec:
           restartPolicy: Never
           # The cleaner token-requests this account; an empty name breaks the clean. The
-          # account and its rights come with the istiod chart.
+          # account comes with the istiod subchart, its rights with the istiod-webhook-rbac
+          # role of this chart (tweak/istiod-rbac/).
           serviceAccountName: istiod
           # Nothing privileged: this pod has to be admissible without the exemption that
           # the ambient agents need, and it only calls the API.
