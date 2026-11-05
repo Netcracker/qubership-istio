@@ -323,14 +323,18 @@ patchPss:
 # label, a failed Job fails that clean run with it. Where no cleaner reads it, the CronJob stays
 # idle, and the webhook configurations are deleted by hand as in the uninstall guide.
 #
-# Where the hook does not fit, the Job fails and the clean stops before anything is deleted, a
-# refusal that damages nothing. Three cases:
+# Where the hook does not fit, nothing is deleted, a refusal that damages nothing. Three cases:
 # - The selection holds a configuration the role does not name: a tag made by `istioctl tag set`
 #   outside these values, the injector of a second revision, or a foreign configuration that
-#   calls a service in this namespace. Remove it, or set it to `Ignore`, before the clean.
-# - A release with `revision` set: the service account is fixed to `istiod`.
+#   calls a service in this namespace. The Job fails and the clean stops. Remove it, or set it
+#   to `Ignore`, before the clean.
+# - A release with `revision` set: the service account is fixed to `istiod`, and with a revision
+#   there is usually no such account, because the role binds `istiod-<revision>`. The pod of the
+#   Job is then never admitted and the Job never starts (a failed creation does not count against
+#   `backoffLimit`), so the clean waits for it until its timeout, or stops earlier, before
+#   anything is deleted.
 # - The release namespace is not global.istioNamespace, or global.resourceScope is not `all` or
-#   `cluster`: the role is not rendered.
+#   `cluster`: the role is not rendered, the Job fails and the clean stops.
 cleanerHook:
   enabled: false
 
