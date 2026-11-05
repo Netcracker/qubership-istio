@@ -1,0 +1,32 @@
+{{/*
+  The tuned cni DaemonSet with a checksum of the istio-cni-config ConfigMap added to its
+  pod template.
+
+  The install-cni container takes its whole configuration from that ConfigMap through
+  envFrom, and reads it once, when it starts. A changed cni.env or excludeNamespaces is
+  therefore written to the ConfigMap and left unread: nothing in the pod template changed,
+  so Helm restarts nothing, and the nodes keep what the previous run of the agents wrote.
+  The checksum is what changes.
+
+  The ConfigMap is rendered here rather than rebuilt from values, so the checksum is of the
+  object that is applied. This template runs before configmap-cni.yaml renders it, which is
+  the point of the include, but after zzz_profile.yaml and
+  zzx_cni_exclude_release_namespace.yaml have merged the platform list and added the
+  release namespace, so the values it reads are the final ones.
+
+  The tuned template is rendered and re-parsed rather than patched, so nothing is tied to
+  an upstream line number. An empty $ds.kind means the resource scope excluded this chart,
+  and the original render is returned unchanged.
+*/}}
+{{- $rendered := include "qubership.cni-daemonset-tuned" . -}}
+{{- $ds := fromYaml $rendered -}}
+{{- if $ds.kind -}}
+{{- $checksum := include (print $.Template.BasePath "/configmap-cni.yaml") . | sha256sum -}}
+{{- $pod := $ds.spec.template -}}
+{{- $_ := set $pod "metadata" ($pod.metadata | default dict) -}}
+{{- $_ := set $pod.metadata "annotations" ($pod.metadata.annotations | default dict) -}}
+{{- $_ := set $pod.metadata.annotations "qubership.istio/istio-cni-config-checksum" $checksum -}}
+{{ toYaml $ds }}
+{{- else -}}
+{{ $rendered }}
+{{- end -}}
