@@ -94,6 +94,19 @@ cni:
   excludeNamespaces:
     - kube-system
 
+  # The upstream chart gives the install-cni container a readiness probe only;
+  # tweak/node-liveness-probe/ adds this one. It checks that the agent listens on the
+  # port of its readiness probe, without depending on readiness, so a node agent is not
+  # restarted while it waits for its state. Set to null to leave the container without
+  # a liveness probe.
+  livenessProbe:
+    tcpSocket:
+      port: 8000
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 5
+
 # ---------------------------------------------------------------------------
 # istiod — control plane (Pilot / istiod)
 # ---------------------------------------------------------------------------
@@ -228,6 +241,19 @@ ztunnel:
     limits:
       cpu: 400m
       memory: 512Mi
+
+  # The upstream chart gives the istio-proxy container a readiness probe only;
+  # tweak/node-liveness-probe/ adds this one. It checks that ztunnel listens on the port
+  # of its readiness probe (the admin port), without depending on readiness, so a node
+  # agent is not restarted while it waits for its certificates. Set to null to leave the
+  # container without a liveness probe.
+  livenessProbe:
+    tcpSocket:
+      port: 15021
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 5
 
 # ---------------------------------------------------------------------------
 # monitoring — PodMonitor, ServiceMonitor and the Grafana dashboards
