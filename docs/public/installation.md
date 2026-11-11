@@ -431,40 +431,57 @@ helm rollback qubership-istio <revision> -n istio-system
 ```
 
 # Uninstall
-Remove Istio in this order. Do not delete the `istio-system` namespace or force-delete its pods instead: the CNI agents then leave their plugin on the nodes, and new pods stop starting, see [Troubleshooting](troubleshooting.md#pods-do-not-start-with-istio-cni-unauthorized).
+Remove Istio in this order. Do not start by deleting the `istio-system` namespace or its pods: a CNI agent that stops while its DaemonSet still exists leaves its plugin on the node, and new pods stop starting there, see [Troubleshooting](troubleshooting.md#pods-do-not-start-with-istio-cni-unauthorized).
 
-1. Redeploy the applications that run in Istio mode without it.
-2. Remove the mesh labels from every enrolled namespace:
+1. Take every namespace out of the mesh. The pods leave the mesh within seconds, without a restart:
 
    ```bash
    kubectl get namespaces -l istio.io/dataplane-mode=ambient
    kubectl label namespace <namespace> istio.io/dataplane-mode- istio.io/use-waypoint-
    ```
 
-   The pods leave the mesh within seconds, without a restart.
-3. Uninstall the release with the tool that installed it, together with its resources, for example `helm uninstall qubership-istio -n istio-system`.
-4. Wait until `istio-system` has no pods left:
+2. Remove the Istio gateways and waypoints. Redeploy the applications that run in Istio mode without it, or delete their `Gateway` resources of the `istio` and `istio-waypoint` classes:
 
    ```bash
-   kubectl get pods -n istio-system
+   kubectl get gateways.gateway.networking.k8s.io -A
+   kubectl delete gateway <name> -n <namespace>
    ```
 
-5. Remove the cluster-scoped objects that a namespaced release leaves behind. A tool that tracks only the namespace of the application does not delete them, and neither does deleting the namespace, so the webhook configurations keep pointing at a service that no longer exists and reject every write of an Istio resource in the cluster:
+3. Delete the DaemonSets and wait until their pods are gone. Each `istio-cni-node` agent removes the plugin from its node before it exits. A `ztunnel` pod takes up to 30 seconds to close its connections:
+
+   ```bash
+   kubectl delete daemonset istio-cni-node ztunnel -n istio-system
+   kubectl wait --for=delete pod -l k8s-app=istio-cni-node -n istio-system --timeout=120s
+   kubectl wait --for=delete pod -l app=ztunnel -n istio-system --timeout=120s
+   ```
+
+   If Argo CD manages the release with self-heal turned on, first delete its Application with `--cascade=false`, or Argo CD creates the DaemonSets again.
+
+4. Remove the rest of the release with the tool that installed it, for example `helm uninstall qubership-istio -n istio-system`, which also removes the cluster-scoped objects. Without such a tool, delete the namespace and then the cluster-scoped objects by name. Delete the webhook configurations right after the namespace: while they point at the deleted `istiod`, every write of an Istio resource in the cluster fails:
+
+   ```bash
+   kubectl delete namespace istio-system
+   kubectl delete validatingwebhookconfiguration istio-validator-istio-system istiod-default-validator
+   kubectl delete mutatingwebhookconfiguration istio-sidecar-injector
+   kubectl delete clusterrole istio-cni istio-cni-ambient istio-cni-repair-role istio-reader-clusterrole-istio-system \
+     istiod-clusterrole-istio-system istiod-gateway-controller-istio-system istiod-webhook-rbac
+   kubectl delete clusterrolebinding istio-cni istio-cni-ambient istio-cni-repair-rolebinding istio-reader-clusterrole-istio-system \
+     istiod-clusterrole-istio-system istiod-gateway-controller-istio-system istiod-webhook-rbac
+   ```
+
+   These are the names of a release in `istio-system`. Another Istio installation in the cluster has webhook configurations with the same names that call its own namespace, so first list the ones that call `istio-system`:
 
    ```bash
    kubectl get validatingwebhookconfigurations,mutatingwebhookconfigurations \
      -o jsonpath='{range .items[?(@.webhooks[0].clientConfig.service.namespace=="istio-system")]}{.kind}/{.metadata.name}{"\n"}{end}'
-   kubectl delete validatingwebhookconfiguration istio-validator-istio-system istiod-default-validator
-   kubectl delete mutatingwebhookconfiguration istio-sidecar-injector
    ```
 
-   Delete by the names the first command prints. It lists the configurations that call a service in `istio-system`, so those of another Istio installation in the cluster, which carry the same names and call their own namespace, stay. The ClusterRoles and ClusterRoleBindings of the release go by name.
+   Deleting the ClusterRoles and ClusterRoleBindings takes cluster administrator rights. Left in place, they bind only the service accounts of `istio-system`, which are gone with the namespace.
 
-6. If Istio is not coming back, delete its CRDs and the namespace. Deleting the CRDs deletes every Istio resource in the cluster:
+5. If Istio is not coming back, delete its CRDs. This deletes every Istio resource in the cluster:
 
    ```bash
    kubectl get crd -o name | grep '\.istio\.io$' | xargs kubectl delete
-   kubectl delete namespace istio-system
    ```
 
 # See also
