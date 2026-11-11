@@ -2,11 +2,8 @@
 set -euo pipefail
 
 # Verifies, from rendered manifests only, that the chart installs no sidecar injector webhook
-# (the ambient profile has nothing to inject) and keeps what else the flag could touch:
-#   - no MutatingWebhookConfiguration by default;
-#   - both validating webhooks and the istio-sidecar-injector ConfigMap are still there;
-#   - operatorManageWebhooks=false brings the webhook back. The flag was made for the Istio
-#     operator, so this fails if an Istio bump drops it and the check above passes by accident.
+# and keeps the validating webhooks and the istio-sidecar-injector ConfigMap. The flag comes
+# from the Istio operator, so the last check fails if an Istio bump drops it.
 
 RENDER_DIR="$(mktemp -d)"
 trap 'rm -rf "${RENDER_DIR}"' EXIT
