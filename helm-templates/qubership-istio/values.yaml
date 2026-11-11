@@ -4,6 +4,10 @@
 global:
   profile: ambient
 
+  # Do not install the sidecar injector webhook: ambient has nothing to inject, and on AKS
+  # the admissions enforcer rewrites it, which Argo CD reports as OutOfSync.
+  operatorManageWebhooks: true
+
   # namespace where istio will be installed
   istioNamespace: istio-system
 
