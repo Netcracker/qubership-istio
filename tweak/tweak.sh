@@ -18,7 +18,6 @@ bash "${SCRIPT_DIR}/node-inotify/apply.sh" "${CHARTS_DIR}"
 bash "${SCRIPT_DIR}/gke-cni-bin-dir/apply.sh" "${CHARTS_DIR}"
 bash "${SCRIPT_DIR}/openshift-trusted-ztunnel/apply.sh" "${CHARTS_DIR}"
 bash "${SCRIPT_DIR}/istiod-service-labels/apply.sh" "${CHARTS_DIR}"
-bash "${SCRIPT_DIR}/istiod-webhook-labels/apply.sh" "${CHARTS_DIR}"
 bash "${SCRIPT_DIR}/istiod-liveness-probe/apply.sh" "${CHARTS_DIR}"
 
 # 3. Repack all subcharts.
