@@ -4,14 +4,6 @@
 global:
   profile: ambient
 
-  # The sidecar injector webhook (MutatingWebhookConfiguration) is not installed: this
-  # distribution is ambient only and has nothing to inject. On AKS the admissions enforcer
-  # rewrites that webhook, so server-side apply tools report it as OutOfSync. The flag
-  # gates only mutatingwebhook.yaml and revision-tags-mwc.yaml of the istiod chart. The
-  # validating webhooks and the istio-sidecar-injector ConfigMap, which holds the gateway
-  # and waypoint templates, stay. Set to false to bring the webhook back.
-  operatorManageWebhooks: true
-
   # namespace where istio will be installed
   istioNamespace: istio-system
 
