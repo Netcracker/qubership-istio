@@ -78,7 +78,11 @@ cni:
     - kube-system
 ```
 
-The agents read the list when they start. The pod template of the DaemonSet carries a checksum of the `istio-cni-config` ConfigMap, so the agents restart automatically when the configuration changes and the new list reaches the nodes on the next upgrade.
+The agents read the list when they start, and changing the value does not restart them. After a change, restart them once:
+
+```bash
+kubectl rollout restart daemonset/istio-cni-node -n istio-system
+```
 
 The list protects a node only if the agent that left the plugin there already had `istio-system` in its list. On a node left by an agent without it, the hook pod still fails, even when the new installation has the list. Install with the hook turned off, as described in [Installation hangs on the pre-install hook](../troubleshooting.md#installation-hangs-on-the-pre-install-hook), and the new agents repair the node.
 
