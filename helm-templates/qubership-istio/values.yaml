@@ -360,3 +360,9 @@ cleanerHook:
     capabilities:
       drop:
         - ALL
+
+# After an install that made a new mesh root, a post-install Job restarts the gateway and waypoint
+# Deployments that istiod manages and whose pods are older than the root; they would answer 503 for
+# up to 12 hours otherwise. It uses the resources and security contexts of patchPss.
+gatewayRestart:
+  enabled: true

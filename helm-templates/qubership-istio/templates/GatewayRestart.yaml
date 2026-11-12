@@ -1,0 +1,86 @@
+{{- if and .Values.gatewayRestart .Values.gatewayRestart.enabled }}
+---
+# A gateway or waypoint pod trusts the mesh root it got with its certificate, and it asks for a new
+# certificate only half way through the certificate's life, up to 12 hours later. An install that
+# found no istio-ca-secret, such as a Clean Install, gets a new root, and the pods started before it
+# answer 503 until then. This Job restarts their Deployments right after the install.
+#
+# It runs as the istiod service account, which already lists pods and Deployments in every namespace
+# and patches the Deployments it manages, so it brings no RBAC of its own. An upgrade keeps the
+# Secret, its pods are newer than the root, and the Job restarts nothing.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: istio-gateway-restart
+  labels:
+    app: qubership-istio
+    release: {{ .Release.Name }}
+    app.kubernetes.io/name: istio-gateway-restart
+    app.kubernetes.io/part-of: qubership-istio
+    app.kubernetes.io/component: gateway-restart
+  annotations:
+    # Argo CD runs both as a PostSync hook.
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: qubership-istio
+        app.kubernetes.io/name: istio-gateway-restart
+        app.kubernetes.io/part-of: qubership-istio
+        app.kubernetes.io/component: gateway-restart
+    spec:
+      restartPolicy: Never
+      serviceAccountName: istiod
+      securityContext:
+        {{- toYaml .Values.patchPss.podSecurityContext | nindent 8 }}
+      containers:
+        - name: restart
+          image: {{ include "qubership.kubectl.image" . | quote }}
+          {{- with (.Values.global).imagePullPolicy }}
+          imagePullPolicy: {{ . }}
+          {{- end }}
+          env:
+            - name: NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            # The image sets HOME=/ and the root filesystem is read-only.
+            - name: HOME
+              value: /tmp
+            - name: KUBECACHEDIR
+              value: /tmp/.kube/cache
+          # The image's ENTRYPOINT is kubectl, so command must be a shell.
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -o nounset
+              kubectl -n "${NAMESPACE}" rollout status deployment/istiod --timeout=600s || exit 1
+              # No such Secret means a plugged-in CA, whose root outlives the install.
+              root="$(kubectl -n "${NAMESPACE}" get secret istio-ca-secret -o jsonpath='{.metadata.creationTimestamp}')" || exit 0
+              kubectl get deployments -A -l gateway.istio.io/managed \
+                -o jsonpath='{range .items[*]}{.metadata.namespace} {.metadata.name} {.metadata.labels.gateway\.networking\.k8s\.io/gateway-name}{"\n"}{end}' \
+                > /tmp/gateways || exit 1
+              failed=0
+              while read -r ns name gateway; do
+                oldest="$(kubectl -n "${ns}" get pods -l "gateway.networking.k8s.io/gateway-name=${gateway}" \
+                  -o jsonpath='{range .items[*]}{.status.startTime}{"\n"}{end}' | sort | head -1)"
+                # RFC 3339 times in UTC compare as strings.
+                if [ -n "${oldest}" ] && awk -v a="${oldest}" -v b="${root}" 'BEGIN { exit !(a < b) }'; then
+                  kubectl -n "${ns}" rollout restart deployment "${name}" || failed=1
+                fi
+              done < /tmp/gateways
+              exit "${failed}"
+          resources:
+            {{- toYaml .Values.patchPss.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.patchPss.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        # Only so readOnlyRootFilesystem and HOME=/tmp can coexist.
+        - name: tmp
+          emptyDir: {}
+{{- end }}
