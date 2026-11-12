@@ -34,8 +34,16 @@ spec:
     spec:
       restartPolicy: Never
       serviceAccountName: istiod
+      # Restricted-compliant, so the pod is admitted without the exemption the agents need. On
+      # OpenShift the UID comes from the range of the namespace, and a fixed one is refused.
       securityContext:
-        {{- toYaml .Values.patchPss.podSecurityContext | nindent 8 }}
+        runAsNonRoot: true
+        {{- if not (include "qubership.platform.openshift" .) }}
+        # The USER of the kubectl image.
+        runAsUser: 1001
+        {{- end }}
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: restart
           image: {{ include "qubership.kubectl.image" . | quote }}
@@ -73,9 +81,18 @@ spec:
               done < /tmp/gateways
               exit "${failed}"
           resources:
-            {{- toYaml .Values.patchPss.resources | nindent 12 }}
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 150m
+              memory: 128Mi
           securityContext:
-            {{- toYaml .Values.patchPss.containerSecurityContext | nindent 12 }}
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           volumeMounts:
             - name: tmp
               mountPath: /tmp
