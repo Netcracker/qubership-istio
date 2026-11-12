@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # Verifies, from rendered manifests only, that the chart installs no sidecar injector webhook
-# and keeps the validating webhooks and the istio-sidecar-injector ConfigMap. The flag comes
-# from the Istio operator, so the last check fails if an Istio bump drops it.
+# and keeps the validating webhooks and the istio-sidecar-injector ConfigMap. The last check
+# shows the test can see a webhook at all.
 
 RENDER_DIR="$(mktemp -d)"
 trap 'rm -rf "${RENDER_DIR}"' EXIT
@@ -16,7 +16,8 @@ render() {
 
 # count <render> <kind> [name]
 count() {
-  yq -r "select(.kind == \"$2\" and ((\"$3\" == \"\") or .metadata.name == \"$3\")) | .kind" "${RENDER_DIR}/$1.yaml" | grep -c . || true
+  local name="${3:-}"
+  yq ea "[select(.kind == \"$2\" and (\"${name}\" == \"\" or .metadata.name == \"${name}\"))] | length" "${RENDER_DIR}/$1.yaml"
 }
 
 expect() {

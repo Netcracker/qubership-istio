@@ -74,5 +74,5 @@ As a solution, install Istio again. If it is not coming back, delete the leftove
 
 ```bash
 kubectl delete validatingwebhookconfiguration istio-validator-istio-system istiod-default-validator
-kubectl delete mutatingwebhookconfiguration istio-sidecar-injector
+kubectl delete mutatingwebhookconfiguration istio-sidecar-injector --ignore-not-found
 ```
