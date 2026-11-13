@@ -4,6 +4,11 @@
 global:
   profile: ambient
 
+  # Leaves out the sidecar injector webhook, which has nothing to inject in ambient mode.
+  # On AKS the admissions enforcer rewrites every webhook, and Argo CD reports that as OutOfSync.
+  # The upstream name of the switch comes from the removed Istio operator.
+  operatorManageWebhooks: true
+
   # namespace where istio will be installed
   istioNamespace: istio-system
 
