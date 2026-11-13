@@ -1,26 +1,14 @@
 {{/*
-  The @CHART@ DaemonSet with the securityContext of its @CONTAINER@ container set from the
-  containerSecurityContext value. The DaemonSet rendered so far is parsed again rather than
-  patched, so nothing is tied to an upstream line number. Upstream hardcodes some of these
-  keys, such as allowPrivilegeEscalation: true on istio-proxy, so no value of the chart
-  reaches them.
+  The @CHART@ DaemonSet with the containerSecurityContext keys put on the securityContext of
+  its @CONTAINER@ container. Like tweak/node-inotify/, it parses the render so far rather than
+  patching it. Each top-level key replaces the upstream one whole, and a null key keeps it.
+  mergeOverwrite is not used: it never turns the upstream allowPrivilegeEscalation: true into
+  false. Helm drops "<no value>" only from the final output, so it is dropped here before
+  parsing.
 
-  Every top-level key of the value is put into the container's securityContext, on top of
-  what upstream renders. Only the top level is replaced: a nested object such as
-  seccompProfile or capabilities replaces the upstream one whole, it is not merged into it.
-  Keys the value does not name stay as upstream renders them. A key set to null leaves the
-  upstream value in place.
-
-  mergeOverwrite is not used: it does not overwrite true with false, so the upstream
-  allowPrivilegeEscalation: true would stay.
-
-  Helm turns "<no value>" into an empty string only in the final output, not in an
-  included template, so the same replacement runs here before parsing.
-
-  An empty $ds.kind means the resource scope excluded this chart, and an empty
-  containerSecurityContext means nothing is asked for. Either way the render so far is
-  returned unchanged. A render that does not parse, or has no @CONTAINER@ container, fails:
-  an upstream rename must not drop the hardening unnoticed.
+  A render that does not parse, or has no @CONTAINER@ container, fails, so an upstream rename
+  cannot drop the hardening unnoticed. An empty $ds.kind (the resource scope excluded the
+  chart) or an empty value returns the render unchanged.
 */}}
 {{- $rendered := include "qubership.@CHART@-daemonset-pre-security-context" . | replace "<no value>" "" -}}
 {{- $ds := fromYaml $rendered -}}

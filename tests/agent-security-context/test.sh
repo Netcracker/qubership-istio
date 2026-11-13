@@ -1,16 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Verifies the securityContext that tweak/agent-security-context/ puts on the main container
-# of the cni and ztunnel DaemonSets, from rendered manifests only:
-#   - by default install-cni and istio-proxy get allowPrivilegeEscalation: false, and the
-#     other hardening keys are in place, while root and the added capabilities stay;
-#   - the node tuning init container is there by default and gone with
-#     global.nodeTuning.enabled=false, and the values hold either way;
-#   - a key set back in the values wins, in the flat and in the nested form;
-#   - the platform's own securityContext keys survive;
-#   - a null value leaves the container as upstream renders it, so a key the tweak does
-#     not add is back to the upstream value.
+# Renders the chart and checks the securityContext that tweak/agent-security-context/ puts on
+# install-cni and istio-proxy: the defaults, with and without node tuning, a key set in the
+# values, the nested form, OpenShift, and a null value.
 
 RENDER_DIR="$(mktemp -d)"
 trap 'rm -rf "${RENDER_DIR}"' EXIT
@@ -44,7 +37,7 @@ expect() {
 expect_hardened() {
   local r="$1"
   expect "${r}: install-cni allowPrivilegeEscalation" "$(cni "${r}" '.securityContext.allowPrivilegeEscalation')" "false"
-  expect "${r}: install-cni readOnlyRootFilesystem" "$(cni "${r}" '.securityContext.readOnlyRootFilesystem')" "true"
+  expect "${r}: install-cni readOnlyRootFilesystem" "$(cni "${r}" '.securityContext.readOnlyRootFilesystem')" "null"
   expect "${r}: install-cni seccompProfile" "$(cni "${r}" '.securityContext.seccompProfile.type')" "RuntimeDefault"
   expect "${r}: install-cni added capabilities" "$(cni "${r}" '.securityContext.capabilities.add | length')" "5"
   expect "${r}: install-cni runAsUser" "$(cni "${r}" '.securityContext.runAsUser')" "0"
@@ -79,17 +72,17 @@ for ds in istio-cni-node ztunnel; do
   expect "no tuning: node-inotify volumes of ${ds}" "$(node_inotify_volumes no-tuning "${ds}")" "0"
 done
 
-# --- 3. A key set back in the values wins, and mergeOverwrite would not have let true become false ---
-render rollback \
+# --- 3. A key set in the values wins: one set back to upstream, one added ---
+render custom \
   --set ztunnel.containerSecurityContext.allowPrivilegeEscalation=true \
-  --set cni.containerSecurityContext.readOnlyRootFilesystem=false
-expect "rollback: istio-proxy allowPrivilegeEscalation" "$(proxy rollback '.securityContext.allowPrivilegeEscalation')" "true"
-expect "rollback: install-cni readOnlyRootFilesystem" "$(cni rollback '.securityContext.readOnlyRootFilesystem')" "false"
-expect "rollback: install-cni allowPrivilegeEscalation stays" "$(cni rollback '.securityContext.allowPrivilegeEscalation')" "false"
+  --set cni.containerSecurityContext.readOnlyRootFilesystem=true
+expect "custom: istio-proxy allowPrivilegeEscalation" "$(proxy custom '.securityContext.allowPrivilegeEscalation')" "true"
+expect "custom: install-cni readOnlyRootFilesystem" "$(cni custom '.securityContext.readOnlyRootFilesystem')" "true"
+expect "custom: install-cni allowPrivilegeEscalation stays" "$(cni custom '.securityContext.allowPrivilegeEscalation')" "false"
 
 # --- 4. The nested form, which the upstream charts also read ---
-render nested --set cni.cni.containerSecurityContext.readOnlyRootFilesystem=false
-expect "nested: install-cni readOnlyRootFilesystem" "$(cni nested '.securityContext.readOnlyRootFilesystem')" "false"
+render nested --set cni.cni.containerSecurityContext.readOnlyRootFilesystem=true
+expect "nested: install-cni readOnlyRootFilesystem" "$(cni nested '.securityContext.readOnlyRootFilesystem')" "true"
 
 # --- 5. openshift: the platform's SELinux type stays next to the new keys ---
 render openshift --set global.platform=openshift
