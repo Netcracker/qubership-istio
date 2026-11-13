@@ -220,6 +220,13 @@ ztunnel:
   # If Image contains a "/", it will replace the entire `image` in the pod.
   # image: ztunnel
 
+  # Annotations to apply to all top level ztunnel resources, read by the ztunnel
+  # subchart (templates/daemonset.yaml, rbac.yaml, serviceaccount.yaml).
+  annotations:
+    # Argo CD rolls ztunnel only after the istio-cni-node agents. Rolled together, a new pod
+    # can go to a ztunnel that is being replaced and stay without traffic. Helm ignores it.
+    argocd.argoproj.io/sync-wave: "1"
+
   meshConfig:
     defaultConfig:
       proxyMetadata:
@@ -295,3 +302,9 @@ patchPss:
     capabilities:
       drop:
         - ALL
+
+# A Clean Install makes a new root CA, and gateways and waypoints that kept running answer 503
+# until their certificate renews, up to 12 hours later. This Job restarts them right after the
+# install. An upgrade keeps the root, and the Job restarts nothing.
+gatewayRestart:
+  enabled: true
