@@ -98,6 +98,35 @@ global:
     registry: <registry>
 ```
 
+### Container hardening
+Ambient needs root, added capabilities and `hostPath` volumes on its node agents, so they cannot meet every container hardening requirement. The chart sets what it safely can, and a hardening check lists the rest as exceptions.
+
+`cni.containerSecurityContext` and `ztunnel.containerSecurityContext` are put key by key on the `securityContext` of the main container of each agent. A key set to `null` keeps the upstream value.
+
+| Container | Set by upstream or this chart | Added by `containerSecurityContext` |
+|---|---|---|
+| `install-cni` | `drop: ALL`, `seccompProfile: RuntimeDefault` | `allowPrivilegeEscalation: false` |
+| `istio-proxy` (`ztunnel`) | `drop: ALL`, `readOnlyRootFilesystem: true` | `allowPrivilegeEscalation: false`, `seccompProfile: RuntimeDefault` |
+| `node-inotify-tuning` | `allowPrivilegeEscalation: false`, `drop: ALL`, `readOnlyRootFilesystem: true`, `seccompProfile: RuntimeDefault` | nothing |
+
+`allowPrivilegeEscalation: false` turns on `no_new_privs`, but `install-cni` and `istio-proxy` hold `SYS_ADMIN`, and [Kubernetes documents](https://kubernetes.io/docs/tasks/configure-pod-container/security-context/) that such a container can escalate privileges whatever the field says. For these two containers the real boundary is the added capabilities.
+
+What stays, and why:
+
+| Container | Left as it is | Why |
+|---|---|---|
+| `install-cni` | Runs as root (`runAsUser: 0`) and adds `DAC_OVERRIDE` | It writes the plugin and its configuration to `/opt/cni/bin` and `/etc/cni/net.d` |
+| `install-cni` | Writable root filesystem | With legacy iptables, it writes the lock file `/run/xtables.lock` when it sets up the rules of the node, and does not start on a read-only root filesystem |
+| `install-cni` | Adds `SYS_ADMIN` and `SYS_PTRACE` | It opens the network namespace of a pod through `/proc` |
+| `install-cni` | Adds `NET_ADMIN` and `NET_RAW` | It sets up the traffic redirection rules |
+| `install-cni` | `hostPath` volumes `/opt/cni/bin`, `/etc/cni/net.d`, `/proc` (read only), `/var/run/netns`, `/var/run/istio-cni`, `/var/run/ztunnel` | The first two hold the plugin and its configuration, `/proc` and `/var/run/netns` give access to pod namespaces, `/var/run/istio-cni` is the socket between the plugin and the agent, and `/var/run/ztunnel` hands the namespace over to `ztunnel` |
+| `istio-proxy` (`ztunnel`) | Runs as root (`runAsUser: 0`) and adds `SYS_ADMIN` | It enters the network namespace of a pod with `setns` |
+| `istio-proxy` (`ztunnel`) | Adds `NET_ADMIN` and `NET_RAW` | It uses `TPROXY` |
+| `istio-proxy` (`ztunnel`) | `hostPath` volume `/var/run/ztunnel` | It receives the pod namespaces from `install-cni` |
+| `node-inotify-tuning` | Runs as root (`runAsUser: 0`), `hostPath` volume `/proc/sys/fs/inotify` | It writes the node's inotify limits, and the files belong to `root:root` |
+
+Where iptables runs in nftables mode on every node, set `cni.containerSecurityContext.readOnlyRootFilesystem` to `true` to make the root filesystem of `install-cni` read-only as well. Set `global.nodeTuning.enabled` to `false` to remove `node-inotify-tuning` and its volume where the nodes already have the inotify limits, see [General parameters](#general-parameters).
+
 ## OpenShift
 Supported versions: 4.19 to 4.22, the OpenShift releases built on the [supported Kubernetes versions](#kubernetes), from 1.32 in 4.19 to 1.35 in 4.22.
 
@@ -280,6 +309,8 @@ The values below are set by this chart; everything else keeps the vanilla defaul
 | `ztunnel.meshConfig.defaultConfig.proxyMetadata`                                                   | `ISTIO_META_DNS_CAPTURE: "true"`, `ISTIO_META_ROUTER_MODE: "sni-dnat"` | Proxy metadata the chart sets for ztunnel                                                                                                                                                                                                                                                                                                                |
 | `cni.excludeNamespaces`                                                                            | `kube-system`, and the chart adds the release namespace                | The CNI plugin lets pods of these namespaces through without asking the Kubernetes API. The chart always adds the release namespace to the list, so the pre-install hook starts even on a node where a stopped agent with this list left the plugin behind, see [Troubleshooting](troubleshooting.md#installation-hangs-on-the-pre-install-hook). A list set in the values replaces `kube-system`, so keep it |
 | `seccompProfile.type` on `global.proxy`, `cni`, `istiod`, and `istiod.gateways`                    | `RuntimeDefault`                                                       | Keeps the istiod and gateway pods admissible under `restricted`. No effect on the admission of `istio-cni-node` or `ztunnel`, which need `privileged` regardless                                                                                                                                                                                         |
+| `cni.containerSecurityContext`                                                                     | `allowPrivilegeEscalation: false`                                      | Keys put on the `securityContext` of the `install-cni` container. A key set to `null` keeps the upstream value, see [Container hardening](#container-hardening) |
+| `ztunnel.containerSecurityContext`                                                                 | `allowPrivilegeEscalation: false`, `seccompProfile.type: RuntimeDefault` | Keys put on the `securityContext` of the `istio-proxy` container. A key set to `null` keeps the upstream value, see [Container hardening](#container-hardening) |
 | `resources` on `cni`, `istiod`, `ztunnel`                                                          | see [HWE](#hwe)                                                        | Requests and limits for the three components                                                                                                                                                                                                                                                                                                             |
 
 

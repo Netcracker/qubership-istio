@@ -1,0 +1,38 @@
+{{/*
+  The @CHART@ DaemonSet with the containerSecurityContext keys put on the securityContext of
+  its @CONTAINER@ container. Like tweak/node-inotify/, it parses the render so far rather than
+  patching it. Each top-level key replaces the upstream one whole, and a null key keeps it.
+  mergeOverwrite is not used: it never turns the upstream allowPrivilegeEscalation: true into
+  false. Helm drops "<no value>" only from the final output, so it is dropped here before
+  parsing.
+
+  A render that does not parse, or has no @CONTAINER@ container, fails, so an upstream rename
+  cannot drop the hardening unnoticed. An empty $ds.kind (the resource scope excluded the
+  chart) or an empty value returns the render unchanged.
+*/}}
+{{- $rendered := include "qubership.@CHART@-daemonset-pre-security-context" . | replace "<no value>" "" -}}
+{{- $ds := fromYaml $rendered -}}
+{{- with $ds.Error -}}
+{{- fail (printf "tweak/agent-security-context: the @CHART@ daemonset.yaml does not parse: %s" .) -}}
+{{- end -}}
+{{- if and $ds.kind .Values.containerSecurityContext -}}
+{{- $found := false -}}
+{{- range $container := $ds.spec.template.spec.containers -}}
+{{- if eq $container.name "@CONTAINER@" -}}
+{{- $found = true -}}
+{{- $sc := $container.securityContext | default dict -}}
+{{- range $key, $value := $.Values.containerSecurityContext -}}
+{{- if not (kindIs "invalid" $value) -}}
+{{- $_ := set $sc $key $value -}}
+{{- end -}}
+{{- end -}}
+{{- $_ := set $container "securityContext" $sc -}}
+{{- end -}}
+{{- end -}}
+{{- if not $found -}}
+{{- fail "tweak/agent-security-context: the @CHART@ DaemonSet has no container named @CONTAINER@, so containerSecurityContext cannot be applied" -}}
+{{- end -}}
+{{ toYaml $ds }}
+{{- else -}}
+{{ $rendered }}
+{{- end -}}

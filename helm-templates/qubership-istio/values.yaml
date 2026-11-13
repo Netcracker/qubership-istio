@@ -88,6 +88,13 @@ cni:
   seccompProfile:
     type: RuntimeDefault
 
+  # Keys put on the securityContext of the install-cni container
+  # (tweak/agent-security-context/). A key set to null keeps the upstream value.
+  # readOnlyRootFilesystem is left out: with legacy iptables the agent writes
+  # /run/xtables.lock and does not start on a read-only root filesystem.
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+
   # The CNI plugin lets pods of these namespaces through before it asks the
   # Kubernetes API, and never enrolls them in the mesh. The chart always adds
   # the release namespace to this list (tweak/cni-exclude-release-namespace):
@@ -233,6 +240,13 @@ ztunnel:
     limits:
       cpu: 400m
       memory: 512Mi
+
+  # Keys put on the securityContext of the istio-proxy container
+  # (tweak/agent-security-context/). A key set to null keeps the upstream value.
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    seccompProfile:
+      type: RuntimeDefault
 
 # ---------------------------------------------------------------------------
 # monitoring — PodMonitor, ServiceMonitor and the Grafana dashboards
