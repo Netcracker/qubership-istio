@@ -218,9 +218,8 @@ ztunnel:
   # Annotations to apply to all top level ztunnel resources, read by the ztunnel
   # subchart (templates/daemonset.yaml, rbac.yaml, serviceaccount.yaml).
   annotations:
-    # The wave means nothing to `helm upgrade`: Helm has no sync waves and rolls
-    # each workload on its own. Only Argo CD reads it, and it orders ztunnel
-    # after the istio-cni-node agents within one application.
+    # Argo CD rolls ztunnel only after the istio-cni-node agents. Rolled together, a new pod
+    # can go to a ztunnel that is being replaced and stay without traffic. Helm ignores it.
     argocd.argoproj.io/sync-wave: "1"
 
   meshConfig:
@@ -299,8 +298,8 @@ patchPss:
       drop:
         - ALL
 
-# After an install that made a new mesh root, a post-install Job restarts the gateway and waypoint
-# Deployments that istiod manages and whose pods are older than the root; they would answer 503 for
-# up to 12 hours otherwise. An upgrade keeps the root, and the Job restarts nothing.
+# A Clean Install makes a new root CA, and gateways and waypoints that kept running answer 503
+# until their certificate renews, up to 12 hours later. This Job restarts them right after the
+# install. An upgrade keeps the root, and the Job restarts nothing.
 gatewayRestart:
   enabled: true
