@@ -207,7 +207,7 @@ jobs:
           echo "**Image tags**: ${TAGS}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build and push
-        uses: netcracker/qubership-workflow-hub/actions/docker-action@b6bee6f61fdc8b367777c1173fc852a58878a6a7 # v2.5.0
+        uses: netcracker/qubership-workflow-hub/actions/docker-action@b72b7f047fdb44ac85035f87b4d15d1cbdf2cb15 # v3.0.0
         with:
           ref: ${{ inputs.ref }}
           component: |
