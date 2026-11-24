@@ -36,7 +36,7 @@ jobs:
       contents: read
     steps:
       - name: "Check if tag exists"
-        uses: netcracker/qubership-workflow-hub/actions/tag-action@b6bee6f61fdc8b367777c1173fc852a58878a6a7 # v2.5.0
+        uses: netcracker/qubership-workflow-hub/actions/tag-action@cdfcd0a8abd7ba80d7a04a4e9debfb4e24995f1a # v3.0.1
         with:
           tag-name: ${{ inputs.release }}
           ref: ${{ github.ref }}
@@ -53,7 +53,7 @@ jobs:
       contents: write
     steps:
       - name: "Create Tag"
-        uses: netcracker/qubership-workflow-hub/actions/tag-action@b6bee6f61fdc8b367777c1173fc852a58878a6a7 # v2.5.0
+        uses: netcracker/qubership-workflow-hub/actions/tag-action@cdfcd0a8abd7ba80d7a04a4e9debfb4e24995f1a # v3.0.1
         with:
           tag-name: ${{ inputs.release }}
           ref: ${{ github.ref }}
@@ -117,7 +117,7 @@ jobs:
       contents: write
     steps:
       - name: "Delete tag"
-        uses: netcracker/qubership-workflow-hub/actions/tag-action@b6bee6f61fdc8b367777c1173fc852a58878a6a7 # v2.5.0
+        uses: netcracker/qubership-workflow-hub/actions/tag-action@cdfcd0a8abd7ba80d7a04a4e9debfb4e24995f1a # v3.0.1
         with:
           tag-name: ${{ inputs.release }}
           ref: ${{ github.ref }}
