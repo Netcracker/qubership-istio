@@ -1,0 +1,25 @@
+{{/*
+  The upstream @CHART@ DaemonSet with a livenessProbe added to every container that has none.
+  The DaemonSet is rendered by the template node-inotify left in place and re-parsed, not
+  patched, so nothing is tied to an upstream line number.
+
+  The probe only checks that the port the agent serves is open. It does not depend on
+  readiness: a node agent restarted because readiness failed drops the traffic of its node
+  for nothing.
+
+  A livenessProbe value of null leaves the containers as upstream renders them. An empty
+  render, which the resource scope produces when it excludes this DaemonSet, is returned
+  unchanged.
+*/}}
+{{- $rendered := include "qubership.@CHART@-daemonset-probe-upstream" . | replace "<no value>" "" -}}
+{{- $ds := fromYaml $rendered -}}
+{{- if and $ds.kind $.Values.livenessProbe -}}
+{{- range $container := $ds.spec.template.spec.containers -}}
+{{- if not $container.livenessProbe -}}
+{{- $_ := set $container "livenessProbe" $.Values.livenessProbe -}}
+{{- end -}}
+{{- end -}}
+{{ toYaml $ds }}
+{{- else -}}
+{{ $rendered }}
+{{- end -}}
